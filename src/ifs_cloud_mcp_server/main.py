@@ -8,6 +8,8 @@ from .directory_utils import (
     get_data_directory,
     get_supported_extensions,
     resolve_version_to_work_directory,
+    get_version_base_directory,
+    get_version_analysis_file,
 )
 
 # Lazy import: from .server_fastmcp import IFSCloudMCPServer
@@ -23,37 +25,6 @@ def setup_logging(level: str = "INFO"):
             logging.StreamHandler(sys.stderr),
         ],
     )
-
-
-def resolve_version_to_index_path(version: str) -> Path:
-    """Resolve a version name to its corresponding index path.
-
-    Args:
-        version: Version identifier
-
-    Returns:
-        Path to the index directory for this version
-
-    Raises:
-        ValueError: If version doesn't exist or has no index
-    """
-    data_dir = get_data_directory()
-    safe_version = "".join(c for c in version if c.isalnum() or c in "._-")
-
-    extract_path = data_dir / "versions" / safe_version
-    index_path = data_dir / "indexes" / safe_version
-
-    if not extract_path.exists():
-        raise ValueError(
-            f"Version '{version}' not found. Available versions can be listed with: python -m src.ifs_cloud_mcp_server.main list"
-        )
-
-    if not index_path.exists():
-        raise ValueError(
-            f"Version '{version}' found but not indexed. Please re-import with: python -m src.ifs_cloud_mcp_server.main import <zip_file> --version {version}"
-        )
-
-    return index_path
 
 
 def get_version_from_zip(zip_path: Path) -> str:
@@ -385,20 +356,37 @@ def handle_delete_command(args) -> int:
 def handle_server_command(args) -> int:
     """Handle the server command."""
     try:
-        # Resolve version to index path (required)
-        index_path = resolve_version_to_index_path(args.version)
-        logging.info(f"Using IFS Cloud version: {args.version}")
-        logging.info(f"Index path: {index_path}")
+        # Use directory utilities to get the version base directory
+        from .directory_utils import (
+            get_version_base_directory,
+            get_version_analysis_file,
+        )
 
-        # Create index directory if it doesn't exist
-        index_path.mkdir(parents=True, exist_ok=True)
+        version_base_dir = get_version_base_directory(args.version)
+        analysis_file = get_version_analysis_file(args.version)
+
+        logging.info(f"Using IFS Cloud version: {args.version}")
+        logging.info(f"Version directory: {version_base_dir}")
+
+        # Check if version exists
+        if not version_base_dir.exists():
+            raise ValueError(
+                f"Version '{args.version}' not found. Available versions can be listed with: python -m src.ifs_cloud_mcp_server.main list"
+            )
+
+        # Check if analysis data exists (more flexible than requiring indexes)
+        if not analysis_file.exists():
+            raise ValueError(
+                f"Version '{args.version}' found but not analyzed. Please run analysis with: python -m src.ifs_cloud_mcp_server.main analyze --version {args.version}"
+            )
 
         # Lazy import to avoid CLI slowdown
         from .server_fastmcp import IFSCloudMCPServer
 
-        # Create server
+        # Create server with the version base directory
         server = IFSCloudMCPServer(
-            index_path=index_path, name=getattr(args, "name", "ifs-cloud-mcp-server")
+            index_path=version_base_dir,
+            name=getattr(args, "name", "ifs-cloud-mcp-server"),
         )
 
         # Try to run the server, handling asyncio context issues

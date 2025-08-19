@@ -67,7 +67,7 @@ class SearchConfig:
             preset_name="fast_hardware",
             enable_faiss=True,
             enable_flashrank=True,
-            fetch_multiplier=3,
+            fetch_multiplier=4,
         )
 
     @classmethod
@@ -273,16 +273,23 @@ class HybridSearchEngine:
     def _initialize_search_components(self) -> bool:
         """Initialize BM25S, FAISS, and FlashRank components."""
         try:
-            # Initialize BM25S indexer
+            # Get the version directory (parent of checkpoint_dir)
+            version_dir = self.checkpoint_dir.parent
+
+            # Set up specific directories for each component
+            bm25s_dir = version_dir / "bm25s"
+            faiss_dir = version_dir / "faiss"
+
+            # Initialize BM25S indexer with specific directory
             logger.info("🔍 Initializing BM25S search...")
-            self.bm25_indexer = BM25SIndexer(self.search_indexes_dir)
+            self.bm25_indexer = BM25SIndexer(bm25s_dir)
             if not self.bm25_indexer.load_existing_index():
                 logger.error("❌ Failed to load BM25S index")
                 return False
 
-            # Initialize FAISS manager
+            # Initialize FAISS manager with specific directory
             logger.info("🔍 Initializing FAISS search...")
-            self.faiss_manager = FAISSIndexManager(self.search_indexes_dir)
+            self.faiss_manager = FAISSIndexManager(faiss_dir)
             if not self.faiss_manager.load_existing_index():
                 logger.error("❌ Failed to load FAISS index")
                 return False
@@ -307,7 +314,9 @@ class HybridSearchEngine:
 
     def search(
         self,
-        query: str,
+        query: str = None,
+        semantic_query: str = None,
+        lexical_query: str = None,
         top_k: int = 10,
         config: Optional[SearchConfig] = None,
         enable_rerank: Optional[bool] = None,
@@ -318,7 +327,9 @@ class HybridSearchEngine:
         Perform hybrid search with configurable performance options.
 
         Args:
-            query: Search query
+            query: Legacy single search query (used if semantic_query/lexical_query not provided)
+            semantic_query: Query used for FAISS semantic search and FlashRank reranking
+            lexical_query: Query used for BM25S exact/lexical matching
             top_k: Number of results to return
             config: Search configuration (overrides individual enable_* parameters)
             enable_rerank: Whether to apply FlashRank reranking (legacy parameter)
@@ -330,6 +341,23 @@ class HybridSearchEngine:
             - Medium hardware: SearchConfig.medium_hardware() - No FlashRank
             - Slow hardware: SearchConfig.slow_hardware() - BM25S + PageRank only
         """
+        # Handle query parameter combinations
+        if semantic_query is None and lexical_query is None:
+            if query is None:
+                raise ValueError(
+                    "Must provide either 'query' or both 'semantic_query' and 'lexical_query'"
+                )
+            # Legacy mode: use single query for both
+            semantic_query = query
+            lexical_query = query
+            primary_query = query
+        else:
+            # New mode: separate queries
+            if semantic_query is None:
+                semantic_query = lexical_query or ""
+            if lexical_query is None:
+                lexical_query = semantic_query or ""
+            primary_query = semantic_query or lexical_query
         # Use config if provided, otherwise fall back to legacy parameters
         if config is None:
             config = SearchConfig(
@@ -339,8 +367,8 @@ class HybridSearchEngine:
 
         start_time = time.time()
 
-        # Step 1: Analyze query to get search weights
-        query_type, analysis = self.query_analyzer.analyze_query(query)
+        # Step 1: Analyze primary query to get search weights
+        query_type, analysis = self.query_analyzer.analyze_query(primary_query)
         bm25_weight = analysis["search_weights"]["bm25s"]
         faiss_weight = analysis["search_weights"]["faiss"]
 
@@ -356,10 +384,10 @@ class HybridSearchEngine:
 
         # Step 2: Fetch results from enabled sources
         fetch_limit = top_k * config.fetch_multiplier
-        bm25_results = self._search_bm25s(query, analysis, fetch_limit)
+        bm25_results = self._search_bm25s(lexical_query, analysis, fetch_limit)
 
         if config.enable_faiss:
-            faiss_results = self._search_faiss(query, analysis, fetch_limit)
+            faiss_results = self._search_faiss(semantic_query, analysis, fetch_limit)
         else:
             faiss_results = []
 
@@ -398,7 +426,9 @@ class HybridSearchEngine:
 
         # Step 7: Apply FlashRank for final ordering (if enabled)
         if config.enable_flashrank and len(combined_results) > 1:
-            final_results = self._rerank_with_flashrank(query, combined_results)
+            final_results = self._rerank_with_flashrank(
+                semantic_query, combined_results
+            )
             if config.enable_faiss:
                 fusion_method = "pagerank_colbert_flashrank"
             else:
@@ -423,7 +453,9 @@ class HybridSearchEngine:
 
         # Step 9: Enrich results with explanations
         if explain_results:
-            final_results = self._add_explanations(final_results, query, analysis)
+            final_results = self._add_explanations(
+                final_results, primary_query, analysis
+            )
 
         # Step 10: Build response
         search_time = time.time() - start_time
@@ -441,7 +473,7 @@ class HybridSearchEngine:
         logger.info(f"🎯 Search mode: {search_mode}")
 
         response = SearchResponse(
-            query=query,
+            query=primary_query,
             query_type=query_type,
             results=final_results,
             total_found=len(combined_results),

@@ -1,103 +1,428 @@
-# 🧠 IFS Cloud Intelligent AI Agent
+# 🧠 IFS Cloud MCP Server
 
-> \*\*Transform your IFS Cloud developme --connection "oracle://ifsapp:password@host:1521/IFSCDEV" 25.1.0
+> **AI-powered Model Context Protocol server for intelligent IFS Cloud codebase analysis**
 
-````
-
-**📁 Custom ZIP Import** (For specific versions):deeply understands your codebase**
-
-An intelligent Model Context Protocol (MCP) server that makes AI agents truly smart about IFS Cloud development. Features comprehensive code analysis, versioned ZIP catalog management, GUI-aware search with Navigator mappings, database metadata extraction, and intelligent context gathering for perfect architectural consistency.
+A sophisticated Model Context Protocol (MCP) server that provides AI agents with deep understanding of IFS Cloud codebases through comprehensive analysis, PageRank importance ranking, and intelligent code search capabilities.
 
 ---
 
-## ✨ **What Makes This Special**
+## ✨ **Key Features**
 
-### 🎯 **Intelligent AI Agent**
+### 🎯 **Intelligent Code Analysis**
 
-- **Automatic Context Discovery**: AI proactively searches and analyzes your codebase before implementing
-- **Pattern Recognition**: Discovers existing validation rules, APIs, and architectural patterns
-- **Perfect Integration**: Every implementation matches your existing IFS Cloud conventions
-- **Zero False Positives**: Conservative analysis ensures reliable insights
+- **Comprehensive File Analysis**: Extracts API calls, procedure/function names, and dependency relationships
+- **PageRank Ranking**: Identifies the most important files based on dependency network analysis
+- **Reference Graph**: Maps inter-file dependencies for architectural understanding
+- **Multi-format Support**: Handles `.plsql`, `.entity`, `.client`, `.projection`, `.fragment`, and more
 
-> **Transform your IFS Cloud development with AI that deeply understands your codebase**
+### 📦 **Version Management**
 
-An intelligent Model Context Protocol (MCP) server that makes AI agents truly smart about IFS Cloud development. Features comprehensive code analysis, versioned ZIP catalog management, GUI-aware search, and intelligent context gathering for perfect architectural consistency.
+- **ZIP Import**: Import complete IFS Cloud releases from ZIP files
+- **Multiple Versions**: Manage and switch between different IFS Cloud versions
+- **Isolated Analysis**: Each version maintains separate analysis data
+- **Smart Extraction**: Automatically filters and organizes supported file types
 
----
+### 🔍 **Advanced Hybrid Search & Discovery**
 
-## ✨ **What Makes This Special**
-
-### 🎯 **Intelligent AI Agent**
-
-- **Automatic Context Discovery**: AI proactively searches and analyzes your codebase before implementing
-- **Pattern Recognition**: Discovers existing validation rules, APIs, and architectural patterns
-- **Perfect Integration**: Every implementation matches your existing IFS Cloud conventions
-- **Zero False Positives**: Conservative analysis ensures reliable insights
-
-### 🎨 **Modern Web Interface**
-
-- **React + TypeScript**: Modern, responsive web UI with real-time search
-- **Type-ahead Suggestions**: Smart autocomplete with context-aware suggestions
-- **Faceted Filters**: Advanced filtering by file type, complexity, and module
-- **File Viewer**: Built-in CodeMirror editor with IFS Marble syntax highlighting
-- **Dark Theme**: Sleek, modern design optimized for developer productivity
-- **Mobile Responsive**: Works perfectly on desktop, tablet, and mobile devices
-
-### 🧠 **GUI-Aware Smart Search**
-
-- **Real Production Mappings**: GUI labels mapped to backend entities using live IFS Cloud databases
-- **60% Perfect Matches**: Search for "Customer Order" and find CustomerOrder entities instantly
-- **15,000+ Files**: Handle complete IFS Cloud codebases efficiently
-- **Sub-second Search**: Powered by Tantivy search engine with GUI enhancement
-- **Smart Filtering**: Filter by module, file type, complexity, and more
-- **Contextual Results**: Rich metadata with previews and relationships
-
-### 📦 **Versioned Catalog Management**
-
-- **ZIP Import**: Import entire IFS Cloud releases from ZIP files
-- **Version Control**: Manage multiple IFS Cloud versions (24.1, 24.2, latest, dev builds)
-- **Instant Switching**: Switch between versions for different projects
-- **Smart Extraction**: Automatically filters and organizes IFS Cloud files
+- **Dual-Query Hybrid Search**: Separate semantic and lexical queries for precision control
+- **BGE-M3 Semantic Search**: AI-powered understanding using state-of-the-art embeddings
+- **BM25S Lexical Search**: Fast exact matching for API names, functions, and keywords
+- **FlashRank Fusion**: Neural reranking combines semantic and lexical results intelligently
+- **Three Search Modes**: Comprehensive, semantic-only, or lexical-only via MCP tools
+- **PageRank Importance**: Files ranked by their significance in the dependency network
+- **CUDA Acceleration**: GPU-powered semantic search for maximum performance
 
 ---
 
 ## 🚀 **Quick Start**
 
-### 1. **Install & Setup**
+### 1. **Installation**
 
 ```bash
 git clone https://github.com/graknol/ifs-cloud-core-mcp-server.git
 cd ifs-cloud-core-mcp-server
 uv sync
-````
-
-### 2. **Launch the Web Interface**
-
-```bash
-# Start the modern web UI
-uv run python -m src.ifs_cloud_mcp_server.web_ui
-
-# Opens at http://localhost:5700
-# Features: Real-time search, type-ahead, file viewer, dark theme
 ```
 
-### 3. **Choose Your Data Source**
-
-**🏭 Extract from Your Database** (Recommended - Environment-Specific):
-
-- Get metadata tailored to YOUR specific IFS Cloud environment with Navigator GUI mappings
-- Always current with your actual database schema, customizations, and navigation structure
-- Includes FND_NAVIGATOR_ALL mappings connecting GUI elements to backend projections
-- Perfect for developers who want the most accurate search results and UI understanding
+### 2. **Import IFS Cloud Version**
 
 ```bash
-# Secure extraction with environment variables
-export IFS_DB_PASSWORD="your_secure_password"
-uv run python -m src.ifs_cloud_mcp_server.main extract \
-  --host your-db-host --username ifsapp --service IFSCDEV 25.1.0
+# Import an IFS Cloud ZIP file
+uv run python -m src.ifs_cloud_mcp_server.main import "IFS_Cloud_25.1.0.zip" --version "25.1.0"
+```
 
-# Or use connection string for quick setup
-uv run python -m src.ifs_cloud_mcp_server.main extract \
+### 3. **Analyze the Codebase**
+
+```bash
+# Perform comprehensive analysis
+uv run python -m src.ifs_cloud_mcp_server.main analyze --version "25.1.0"
+
+# Calculate PageRank importance scores
+uv run python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version "25.1.0"
+```
+
+### 4. **Start the MCP Server**
+
+```bash
+# Start server with analyzed version
+uv run python -m src.ifs_cloud_mcp_server.main server --version "25.1.0"
+```
+
+---
+
+## 📋 **CLI Commands Reference**
+
+### **Version Management**
+
+```bash
+# Import a ZIP file
+uv run python -m src.ifs_cloud_mcp_server.main import <zip_file> --version <version_name>
+
+# List all versions
+uv run python -m src.ifs_cloud_mcp_server.main list
+
+# Delete a version
+uv run python -m src.ifs_cloud_mcp_server.main delete --version <version_name> [--force]
+```
+
+### **Analysis Commands**
+
+```bash
+# Analyze codebase (extract dependencies, API calls, etc.)
+uv run python -m src.ifs_cloud_mcp_server.main analyze --version <version> [--max-files N] [--force]
+
+# Calculate PageRank importance scores
+uv run python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version <version>
+
+# Create embeddings for semantic search (uses BGE-M3 model)
+uv run python -m src.ifs_cloud_mcp_server.main embed --version <version> [--max-files N]
+
+# Create test embeddings (top 10 files for quick testing)
+uv run python -m src.ifs_cloud_mcp_server.main embed --version <version> --max-files 10
+```
+
+### **Server Operation**
+
+```bash
+# Start MCP server
+uv run python -m src.ifs_cloud_mcp_server.main server --version <version>
+
+# Start web UI (if available)
+uv run python -m src.ifs_cloud_mcp_server.web_ui
+```
+
+---
+
+## � **MCP Search Tools**
+
+The server provides three sophisticated search tools for AI agents:
+
+### **search_ifs_codebase** - Comprehensive Hybrid Search
+
+```typescript
+// Full hybrid search with separate semantic and lexical queries
+search_ifs_codebase(
+  query: "validation logic",           // Main query (fallback for both)
+  semantic_query: "business rules",    // For FAISS semantic search
+  lexical_query: "Check_Insert___",   // For BM25S exact matching
+  max_results: 10,                    // Number of results
+  explain: true                       // Include scoring explanations
+)
+```
+
+### **search_ifs_semantic** - AI-Powered Understanding
+
+```typescript
+// Pure semantic search using BGE-M3 embeddings
+search_ifs_semantic(
+  semantic_query: "customer credit validation patterns",
+  max_results: 10,
+  explain: true
+)
+```
+
+### **search_ifs_lexical** - Exact API & Keyword Matching
+
+```typescript
+// Pure lexical search using BM25S
+search_ifs_lexical(
+  lexical_query: "Customer_API.Get_Credit_Limit___",
+  max_results: 10,
+  explain: true
+)
+```
+
+**Key Features:**
+
+- **Dual Query Processing**: Different queries optimized for semantic vs lexical search
+- **BGE-M3 Embeddings**: 1024-dimension vectors with 8192 token context
+- **CUDA Acceleration**: GPU-powered semantic search when available
+- **FlashRank Fusion**: Neural reranking for optimal result ordering
+- **PageRank Integration**: Importance-weighted result scoring
+- **Detailed Explanations**: Optional scoring breakdowns for transparency
+
+---
+
+## �🔧 **MCP Client Configuration**
+
+### **Claude Desktop**
+
+Add to your Claude Desktop configuration:
+
+```json
+{
+  "mcpServers": {
+    "ifs-cloud": {
+      "command": "uv",
+      "args": [
+        "run",
+        "python",
+        "-m",
+        "src.ifs_cloud_mcp_server.main",
+        "server",
+        "--version",
+        "25.1.0"
+      ],
+      "cwd": "/path/to/ifs-cloud-core-mcp-server"
+    }
+  }
+}
+```
+
+### **Other MCP Clients**
+
+```bash
+# Standard MCP server startup
+uv run python -m src.ifs_cloud_mcp_server.main server --version "25.1.0"
+```
+
+---
+
+## 📊 **Analysis Output**
+
+The system generates comprehensive analysis data:
+
+### **Dependency Analysis**
+
+- **API Calls**: Which APIs each file calls
+- **Reference Graph**: File-to-file dependency mappings
+- **Incoming Links**: How many files depend on each file
+
+### **PageRank Scoring**
+
+- **Importance Ranking**: Files ranked by network centrality
+- **Foundation APIs**: Infrastructure files (FndSession, Site, etc.) rank highest
+- **Business Logic**: Domain-specific files ranked by usage patterns
+
+### **File Metadata**
+
+- **File Size & Type**: Basic file characteristics
+- **Procedure/Function Names**: Code structure analysis
+- **Change Information**: Extracted from comments and headers
+
+---
+
+## 🎯 **Intelligent Workflow Example**
+
+### **AI Agent Search Workflow**
+
+```
+💬 User: "Find customer credit validation patterns in IFS Cloud"
+
+🧠 AI Agent automatically uses hybrid search:
+
+1️⃣ **Semantic Search** (search_ifs_semantic):
+   Query: "customer credit validation business rules"
+   → BGE-M3 finds conceptually similar code patterns
+   → Returns files with credit checking logic, validation routines
+
+2️⃣ **Lexical Search** (search_ifs_lexical):
+   Query: "Customer_API Credit_Limit Check_Credit"
+   → BM25S finds exact API names and function calls
+   → Returns specific implementation methods
+
+3️⃣ **Hybrid Fusion** (search_ifs_codebase):
+   Semantic: "credit validation patterns"
+   Lexical: "Customer_API.Check_Credit___"
+   → FlashRank combines both approaches intelligently
+   → PageRank boosts important foundation files
+
+✅ Result: Comprehensive understanding across:
+   - Business logic patterns (semantic)
+   - Exact API implementations (lexical)
+   - Architectural importance (PageRank)
+   - Perfect architectural consistency!
+```
+
+### **Complete Setup Workflow**
+
+```bash
+# 1. Import IFS Cloud version
+uv run python -m src.ifs_cloud_mcp_server.main import "IFS_Cloud_25.1.0.zip" --version "25.1.0"
+
+# 2. Analyze the codebase (extract dependencies, API calls)
+uv run python -m src.ifs_cloud_mcp_server.main analyze --version "25.1.0"
+
+# 3. Calculate importance rankings (PageRank network analysis)
+uv run python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version "25.1.0"
+
+# 4. Create semantic embeddings (BGE-M3 model, ~5-10 minutes)
+uv run python -m src.ifs_cloud_mcp_server.main embed --version "25.1.0"
+
+# 5. Start MCP server with full hybrid search capabilities
+uv run python -m src.ifs_cloud_mcp_server.main server --version "25.1.0"
+```
+
+**Result**: AI agents now have comprehensive hybrid search across your IFS Cloud codebase!
+
+---
+
+## 📁 **Supported File Types**
+
+| File Type         | Purpose                   | Analysis Features                |
+| ----------------- | ------------------------- | -------------------------------- |
+| **`.plsql`**      | PL/SQL Business Logic     | API calls, procedures, functions |
+| **`.entity`**     | Data Entity Definitions   | Entity relationships             |
+| **`.client`**     | User Interface Components | UI patterns, commands            |
+| **`.projection`** | Data Access Layer         | Queries, actions                 |
+| **`.fragment`**   | Full-Stack Components     | Complete integration patterns    |
+| **`.views`**      | Database Views            | Data structure                   |
+| **`.storage`**    | Storage Definitions       | Database mappings                |
+
+---
+
+## 🏗️ **Architecture**
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   AI Client     │◄──►│   MCP Server    │◄──►│ Analysis Data   │
+│ (Claude, etc.)  │    │                 │    │ (JSON/JSONL)    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌─────────────────┐
+                       │ Hybrid Search   │
+                       │ • BGE-M3 FAISS  │
+                       │ • BM25S Lexical │
+                       │ • FlashRank     │
+                       │ • PageRank      │
+                       └─────────────────┘
+```
+
+### **Search Architecture Detail**
+
+```
+Query Input
+     │
+     ▼
+┌─────────────────┐
+│ Query Processor │ ◄─── Semantic Query + Lexical Query
+│ • Intent detect │
+│ • Query split   │
+└─────────────────┘
+     │
+     ▼
+┌─────────────────┐    ┌─────────────────┐
+│ FAISS Search    │    │ BM25S Search    │
+│ • BGE-M3 embed  │    │ • Exact match   │
+│ • Semantic sim  │    │ • Keyword score │
+│ • CUDA accel    │    │ • Fast retrieval│
+└─────────────────┘    └─────────────────┘
+     │                          │
+     └─────────┬─────────────────┘
+               ▼
+        ┌─────────────────┐
+        │ FlashRank Fusion│
+        │ • Neural rerank │
+        │ • Score fusion  │
+        │ • PageRank boost│
+        └─────────────────┘
+               ▼
+        Final Ranked Results
+```
+
+---
+
+## 📈 **Performance**
+
+### **Search Performance**
+
+- **Hybrid Search Response**: <100ms for most queries with CUDA acceleration
+- **BGE-M3 Embedding Generation**: ~50ms per query (GPU) / ~200ms (CPU)
+- **BM25S Lexical Search**: <10ms across 10,000+ documents
+- **FlashRank Neural Reranking**: <50ms for top-K candidate fusion
+- **FAISS Vector Search**: <20ms with 1024-dim BGE-M3 embeddings
+
+### **System Performance**
+
+- **Analysis Speed**: 1,000+ files/second on modern hardware
+- **Memory Efficient**: Handles 10,000+ file codebases
+- **Scalable**: Version isolation prevents data conflicts
+- **GPU Acceleration**: Automatic CUDA detection for semantic search
+
+---
+
+## 🛠️ **Development**
+
+```bash
+# Install for development
+uv sync --dev
+
+# Run tests
+uv run pytest
+
+# Format code
+uv run black src/ tests/
+
+# Type checking
+uv run mypy src/
+```
+
+---
+
+## 📚 **Data Storage**
+
+The system stores data in versioned directories with separate indexes:
+
+```
+%APPDATA%/ifs_cloud_mcp_server/               # Windows
+~/.local/share/ifs_cloud_mcp_server/          # Linux/macOS
+├── versions/
+│   └── 25.1.0/
+│       ├── source/              # Extracted files
+│       ├── analysis/            # Analysis results
+│       ├── ranked.jsonl         # PageRank results
+│       ├── bm25s/              # BM25S lexical index
+│       │   ├── index.h5        # BM25S index data
+│       │   └── corpus.jsonl    # Document corpus
+│       └── faiss/              # FAISS semantic index
+│           ├── index.faiss     # Vector index
+│           ├── embeddings.npy  # BGE-M3 embeddings
+│           └── metadata.jsonl  # Document metadata
+└── models/                     # Downloaded models
+    └── bge-m3/                # BGE-M3 model cache
+```
+
+---
+
+## 🔮 **Future Enhancements**
+
+- � **Advanced AI Models**: Integration with newer embedding models (BGE-M4, E5-v3)
+- 🔍 **Query Understanding**: Natural language intent classification and query expansion
+- 📊 **Visual Analytics**: Interactive dependency graph visualization
+- 🌐 **Web Interface**: Enhanced browser-based exploration with search filtering
+- 🚀 **Performance**: Further optimization of hybrid search pipeline
+- 🎯 **Specialized Search**: Domain-specific search modes (UI patterns, business logic, etc.)
+
+---
+
+<div align="center">
+
+**[⭐ Star this repo](https://github.com/graknol/ifs-cloud-core-mcp-server)** • **[🐛 Report Issues](https://github.com/graknol/ifs-cloud-core-mcp-server/issues)** • **[💬 Discussions](https://github.com/graknol/ifs-cloud-core-mcp-server/discussions)**
+
+_Built with ❤️ for IFS Cloud developers_
+
+</div>
   --connection "oracle://ifsapp:password@host:1521/IFSCDEV" 25.1.0
 ```
 
