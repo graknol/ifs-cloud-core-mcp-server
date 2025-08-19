@@ -78,6 +78,9 @@ uv run python -m src.ifs_cloud_mcp_server.main server --version "25.1.0"
 # Import a ZIP file
 uv run python -m src.ifs_cloud_mcp_server.main import <zip_file> --version <version_name>
 
+# Download pre-built indexes from GitHub (fastest setup)
+uv run python -m src.ifs_cloud_mcp_server.main download --version <version> [--force]
+
 # List all versions
 uv run python -m src.ifs_cloud_mcp_server.main list
 
@@ -254,11 +257,26 @@ The system generates comprehensive analysis data:
    - Perfect architectural consistency!
 ```
 
-### **Complete Setup Workflow**
+### **Fast Setup Workflow** ⚡ _(Recommended)_
 
 ```bash
 # 1. Import IFS Cloud version
-uv run python -m src.ifs_cloud_mcp_server.main import "IFS_Cloud_25.1.0.zip" --version "25.1.0"
+uv run python -m src.ifs_cloud_mcp_server.main import "IFS_Cloud_25.1.0.zip"
+
+# 2. Download pre-built indexes from GitHub (if available)
+uv run python -m src.ifs_cloud_mcp_server.main download --version "25.1.0"
+
+# 3. Start MCP server immediately
+uv run python -m src.ifs_cloud_mcp_server.main server --version "25.1.0"
+```
+
+**Result**: Ready in minutes instead of hours! ⚡
+
+### **Complete Setup Workflow** _(If download unavailable)_
+
+```bash
+# 1. Import IFS Cloud version
+uv run python -m src.ifs_cloud_mcp_server.main import "IFS_Cloud_25.1.0.zip"
 
 # 2. Analyze the codebase (extract dependencies, API calls)
 uv run python -m src.ifs_cloud_mcp_server.main analyze --version "25.1.0"
@@ -266,10 +284,13 @@ uv run python -m src.ifs_cloud_mcp_server.main analyze --version "25.1.0"
 # 3. Calculate importance rankings (PageRank network analysis)
 uv run python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version "25.1.0"
 
-# 4. Create semantic embeddings (BGE-M3 model, ~5-10 minutes)
+# 4. Build BM25S lexical search index
+uv run python -m src.ifs_cloud_mcp_server.main reindex-bm25s --version "25.1.0"
+
+# 5. Optional: Create semantic embeddings (BGE-M3 model, ~5-10 minutes)
 uv run python -m src.ifs_cloud_mcp_server.main embed --version "25.1.0"
 
-# 5. Start MCP server with full hybrid search capabilities
+# 6. Start MCP server with full hybrid search capabilities
 uv run python -m src.ifs_cloud_mcp_server.main server --version "25.1.0"
 ```
 

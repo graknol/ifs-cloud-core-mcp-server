@@ -8,7 +8,9 @@
 
 ## 🎯 **CLI Overview**
 
-The IFS Cloud MCP Server CLI provides comprehensive management of IFS Cloud codebase versions with advanced hybrid search capabilities. The CLI is designed for programmatic integration and supports both interactive and automated workflows.
+The IFS Cloud MCP Server CLI provides comprehensive management of IFS Cloud codebase versions with advanced hybrid search capabilities. The CLI ---
+
+### **9. SERVER Command** *(Default)*designed for programmatic integration and supports both interactive and automated workflows.
 
 ### **Core Architecture**
 
@@ -159,7 +161,66 @@ Are you sure? (y/N):
 
 ---
 
-### **4. ANALYZE Command**
+### **4. DOWNLOAD Command**
+
+**Purpose**: Download pre-built indexes from GitHub releases for faster setup
+
+```bash
+python -m src.ifs_cloud_mcp_server.main download --version <version> [OPTIONS]
+```
+
+**Arguments:**
+
+- `--version` (required): Version identifier to download indexes for
+
+**Options:**
+
+- `--force`: Overwrite existing indexes
+- `--log-level {DEBUG,INFO,WARNING,ERROR}`: Logging level (default: INFO)
+
+**Behavior:**
+
+1. Validates that version directory exists (must import first)
+2. Checks GitHub releases for matching index files
+3. Downloads BM25S and FAISS indexes if available
+4. Extracts indexes to appropriate directories
+5. Provides confirmation and next steps
+
+**Output:**
+
+```
+🔄 Starting download for version 25.1.0...
+🔍 Checking GitHub releases for version 25.1.0...
+✅ Found release: IFS Cloud 25.1.0 Pre-built Indexes
+📥 Downloading BM25S index (45,328,992 bytes)...
+✅ BM25S index extracted to C:\...\versions\25.1.0\bm25s
+📥 Downloading FAISS index (124,857,344 bytes)...
+✅ FAISS index extracted to C:\...\versions\25.1.0\faiss
+🎉 Successfully downloaded indexes for version 25.1.0
+    BM25S: C:\...\versions\25.1.0\bm25s
+    FAISS: C:\...\versions\25.1.0\faiss
+
+✅ Download completed successfully for version 25.1.0!
+    Ready to start MCP server:
+    python -m src.ifs_cloud_mcp_server.main server --version "25.1.0"
+```
+
+**Error Handling:**
+
+- Version directory doesn't exist → Guidance to import first
+- No matching GitHub release → Lists available releases, suggests local generation
+- Network errors → Clear error messages with fallback suggestions
+- Missing or invalid index files → Detailed asset information
+
+**GitHub Release Format:**
+
+- **Release Tag**: `indexes-{version}` (e.g., `indexes-25.1.0`)
+- **Assets**: `{version}-bm25s.zip`, `{version}-faiss.zip`
+- **Repository**: `graknol/ifs-cloud-core-mcp-server`
+
+---
+
+### **5. ANALYZE Command**
 
 **Purpose**: Generate comprehensive codebase analysis
 
@@ -203,7 +264,7 @@ Processing files: 100%|████████████| 15432/15432 [02:34<
 
 ---
 
-### **5. CALCULATE-PAGERANK Command**
+### **6. CALCULATE-PAGERANK Command**
 
 **Purpose**: Calculate PageRank importance scores based on dependencies
 
@@ -255,7 +316,7 @@ Iteration 45: Converged (delta: 8.23e-07)
 
 ---
 
-### **6. EMBED Command**
+### **7. EMBED Command**
 
 **Purpose**: Create semantic embeddings using BGE-M3 model
 
@@ -308,7 +369,7 @@ python -m src.ifs_cloud_mcp_server.main embed --version <version> [OPTIONS]
 
 ---
 
-### **7. REINDEX-BM25S Command**
+### **8. REINDEX-BM25S Command**
 
 **Purpose**: Rebuild BM25S lexical search index
 
@@ -532,7 +593,36 @@ const listVersions = async (): Promise<Version[]> => {
 ### **Workflow Automation**
 
 ```typescript
-// Complete setup workflow for new version
+// Fast setup workflow - try download first (recommended)
+const setupVersionFast = async (zipPath: string): Promise<void> => {
+  // 1. Import ZIP file
+  await executeCommand("import", [zipPath]);
+
+  // 2. Get version from output
+  const versions = await listVersions();
+  const latestVersion = versions[0].version;
+
+  // 3. Try to download pre-built indexes first
+  const downloadResult = await executeCommand("download", [
+    "--version",
+    latestVersion,
+  ]);
+
+  if (downloadResult.exitCode === 0) {
+    // Success! Ready to use immediately
+    console.log("✅ Fast setup complete - ready for MCP server");
+    return;
+  }
+
+  // 4. Fallback to local generation if download fails
+  console.log("📦 Download failed, generating indexes locally...");
+  await executeCommand("analyze", ["--version", latestVersion]);
+  await executeCommand("calculate-pagerank", ["--version", latestVersion]);
+  await executeCommand("reindex-bm25s", ["--version", latestVersion]);
+  // Optional: await executeCommand('embed', ['--version', latestVersion]);
+};
+
+// Complete setup workflow for new version (local generation)
 const setupVersion = async (zipPath: string): Promise<void> => {
   // 1. Import
   await executeCommand("import", [zipPath]);
@@ -547,7 +637,10 @@ const setupVersion = async (zipPath: string): Promise<void> => {
   // 4. Calculate PageRank
   await executeCommand("calculate-pagerank", ["--version", latestVersion]);
 
-  // 5. Optional: Create embeddings (resource intensive)
+  // 5. Build BM25S index
+  await executeCommand("reindex-bm25s", ["--version", latestVersion]);
+
+  // 6. Optional: Create embeddings (resource intensive)
   // await executeCommand('embed', ['--version', latestVersion]);
 };
 ```

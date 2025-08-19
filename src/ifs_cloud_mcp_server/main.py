@@ -159,6 +159,203 @@ def extract_ifs_cloud_zip(zip_path: Path, version: str) -> Path:
     return extract_dir
 
 
+def download_github_indexes(version: str, force: bool = False) -> bool:
+    """Download pre-built index files from GitHub releases for the specified version.
+
+    Args:
+        version: IFS Cloud version (e.g., '25.1.0')
+        force: Overwrite existing indexes if they exist
+
+    Returns:
+        True if download was successful, False otherwise
+    """
+    import requests
+    import zipfile
+    import tempfile
+    from .directory_utils import get_version_base_directory
+
+    try:
+        # GitHub repository information
+        GITHUB_OWNER = "graknol"
+        GITHUB_REPO = "ifs-cloud-core-mcp-server"
+
+        # Get version base directory
+        version_base_dir = get_version_base_directory(version)
+        bm25s_dir = version_base_dir / "bm25s"
+        faiss_dir = version_base_dir / "faiss"
+
+        # Check if indexes already exist
+        if not force and bm25s_dir.exists() and faiss_dir.exists():
+            logging.info(f"✅ Indexes already exist for version {version}")
+            logging.info("    Use --force to overwrite existing indexes")
+            return True
+
+        logging.info(f"🔍 Checking GitHub releases for version {version}...")
+
+        # Get all releases from GitHub
+        releases_url = (
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
+        )
+        response = requests.get(releases_url)
+        response.raise_for_status()
+
+        releases = response.json()
+
+        if not releases:
+            logging.warning("❌ No releases found in GitHub repository")
+            return False
+
+        # Look through releases for assets matching our version
+        matching_release = None
+        bm25s_asset = None
+        faiss_asset = None
+
+        # Check latest release first, then fall back to other releases
+        for release in releases:
+            logging.info(f"🔍 Checking release: {release['tag_name']}")
+
+            # Look for assets that match the version pattern
+            temp_bm25s_asset = None
+            temp_faiss_asset = None
+
+            for asset in release.get("assets", []):
+                asset_name = asset["name"]
+                # Look for patterns like: 25.1.0-bm25s.zip, 25.1.0-faiss.zip, or 25.1.0.zip (containing both)
+                if version in asset_name:
+                    if "bm25s" in asset_name.lower():
+                        temp_bm25s_asset = asset
+                        logging.info(f"   ✅ Found BM25S asset: {asset_name}")
+                    elif "faiss" in asset_name.lower():
+                        temp_faiss_asset = asset
+                        logging.info(f"   ✅ Found FAISS asset: {asset_name}")
+                    elif asset_name == f"{version}.zip":
+                        # Single ZIP file containing both indexes
+                        temp_bm25s_asset = asset
+                        temp_faiss_asset = asset
+                        logging.info(f"   ✅ Found combined asset: {asset_name}")
+
+            # If we found both assets in this release, use it
+            if temp_bm25s_asset and temp_faiss_asset:
+                matching_release = release
+                bm25s_asset = temp_bm25s_asset
+                faiss_asset = temp_faiss_asset
+                break
+
+        if not matching_release:
+            logging.warning(f"❌ No assets found for version {version}")
+            logging.info("    Available releases and assets:")
+            for release in releases[:3]:  # Show first 3 releases
+                logging.info(f"      Release: {release['tag_name']}")
+                for asset in release.get("assets", []):
+                    logging.info(f"        - {asset['name']}")
+            return False
+
+        logging.info(f"✅ Using release: {matching_release['tag_name']}")
+
+        # Assets were already found in the search loop above
+        # bm25s_asset and faiss_asset are already set
+
+        # Create directories if they don't exist
+        version_base_dir.mkdir(parents=True, exist_ok=True)
+
+        # Handle single combined ZIP file or separate files
+        if bm25s_asset == faiss_asset:
+            # Single ZIP file containing both indexes
+            logging.info(
+                f"📥 Downloading combined indexes ({bm25s_asset['size']} bytes)..."
+            )
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+                response = requests.get(
+                    bm25s_asset["browser_download_url"], stream=True
+                )
+                response.raise_for_status()
+
+                for chunk in response.iter_content(chunk_size=8192):
+                    tmp_file.write(chunk)
+
+                tmp_path = Path(tmp_file.name)
+
+            # Extract combined ZIP
+            if force:
+                import shutil
+
+                if bm25s_dir.exists():
+                    shutil.rmtree(bm25s_dir)
+                if faiss_dir.exists():
+                    shutil.rmtree(faiss_dir)
+
+            with zipfile.ZipFile(tmp_path, "r") as zip_ref:
+                zip_ref.extractall(version_base_dir)
+
+            tmp_path.unlink()
+            logging.info(f"✅ Combined indexes extracted to {version_base_dir}")
+
+        else:
+            # Separate BM25S and FAISS files
+            # Download and extract BM25S index
+            logging.info(f"📥 Downloading BM25S index ({bm25s_asset['size']} bytes)...")
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+                bm25s_response = requests.get(
+                    bm25s_asset["browser_download_url"], stream=True
+                )
+                bm25s_response.raise_for_status()
+
+                for chunk in bm25s_response.iter_content(chunk_size=8192):
+                    tmp_file.write(chunk)
+
+                tmp_path = Path(tmp_file.name)
+
+            # Extract BM25S
+            if force and bm25s_dir.exists():
+                import shutil
+
+                shutil.rmtree(bm25s_dir)
+
+            with zipfile.ZipFile(tmp_path, "r") as zip_ref:
+                zip_ref.extractall(version_base_dir)
+
+            tmp_path.unlink()
+            logging.info(f"✅ BM25S index extracted to {bm25s_dir}")
+
+            # Download and extract FAISS index
+            logging.info(f"📥 Downloading FAISS index ({faiss_asset['size']} bytes)...")
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+                faiss_response = requests.get(
+                    faiss_asset["browser_download_url"], stream=True
+                )
+                faiss_response.raise_for_status()
+
+                for chunk in faiss_response.iter_content(chunk_size=8192):
+                    tmp_file.write(chunk)
+
+                tmp_path = Path(tmp_file.name)
+
+            # Extract FAISS
+            if force and faiss_dir.exists():
+                import shutil
+
+                shutil.rmtree(faiss_dir)
+
+            with zipfile.ZipFile(tmp_path, "r") as zip_ref:
+                zip_ref.extractall(version_base_dir)
+
+            tmp_path.unlink()
+            logging.info(f"✅ FAISS index extracted to {faiss_dir}")
+
+        logging.info(f"🎉 Successfully downloaded indexes for version {version}")
+        logging.info(f"    BM25S: {bm25s_dir}")
+        logging.info(f"    FAISS: {faiss_dir}")
+
+        return True
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ Network error downloading indexes: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"❌ Failed to download indexes: {e}")
+        return False
+
+
 def handle_import_command(args) -> int:
     """Handle the import command - auto-detect version and extract files to version directory."""
     try:
@@ -187,6 +384,61 @@ def handle_import_command(args) -> int:
 
     except Exception as e:
         logging.error(f"❌ Import failed: {e}")
+        return 1
+
+
+def handle_download_command(args) -> int:
+    """Handle the download command - download pre-built indexes from GitHub."""
+    try:
+        version = args.version
+        force = getattr(args, "force", False)
+
+        logging.info(f"🔄 Starting download for version {version}...")
+
+        # Check if version directory exists
+        from .directory_utils import get_version_base_directory
+
+        version_base_dir = get_version_base_directory(version)
+
+        if not version_base_dir.exists():
+            logging.error(f"❌ Version directory not found: {version_base_dir}")
+            logging.error(f"    Please import the version first:")
+            logging.error(
+                f"    python -m src.ifs_cloud_mcp_server.main import <zip_file>"
+            )
+            return 1
+
+        # Attempt to download indexes
+        success = download_github_indexes(version, force=force)
+
+        if success:
+            logging.info("")
+            logging.info(f"✅ Download completed successfully for version {version}!")
+            logging.info("    Ready to start MCP server:")
+            logging.info(
+                f'    python -m src.ifs_cloud_mcp_server.main server --version "{version}"'
+            )
+            return 0
+        else:
+            logging.error(f"❌ Download failed for version {version}")
+            logging.info("")
+            logging.info("    Alternative: Generate indexes locally:")
+            logging.info(
+                f'    python -m src.ifs_cloud_mcp_server.main analyze --version "{version}"'
+            )
+            logging.info(
+                f'    python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version "{version}"'
+            )
+            logging.info(
+                f'    python -m src.ifs_cloud_mcp_server.main reindex-bm25s --version "{version}"'
+            )
+            logging.info(
+                f'    python -m src.ifs_cloud_mcp_server.main embed --version "{version}"'
+            )
+            return 1
+
+    except Exception as e:
+        logging.error(f"❌ Download command failed: {e}")
         return 1
 
 
@@ -916,6 +1168,26 @@ def main_sync():
         help="Log level (default: INFO)",
     )
 
+    # Download command (synchronous) - Download pre-built indexes from GitHub
+    download_parser = subparsers.add_parser(
+        "download",
+        help="Download pre-built indexes from GitHub releases for faster setup",
+    )
+    download_parser.add_argument(
+        "--version",
+        required=True,
+        help="IFS Cloud version to download indexes for (e.g., 25.1.0)",
+    )
+    download_parser.add_argument(
+        "--force", action="store_true", help="Overwrite existing indexes"
+    )
+    download_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO)",
+    )
+
     # Analyze command (synchronous) - Generate comprehensive file analysis
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -1073,6 +1345,10 @@ def main_sync():
         # Delete command is synchronous
         setup_logging(args.log_level)
         return handle_delete_command(args)
+    elif getattr(args, "command", None) == "download":
+        # Download command is synchronous
+        setup_logging(args.log_level)
+        return handle_download_command(args)
     elif getattr(args, "command", None) == "analyze":
         # Analyze command is synchronous
         setup_logging(args.log_level)
