@@ -727,12 +727,13 @@ class FAISSIndexManager:
 
     def __init__(self, index_dir: Path, embedding_dim: int = 1024):
         self.index_dir = index_dir
-        self.index_dir.mkdir(parents=True, exist_ok=True)
+        self.faiss_dir = self.index_dir / "faiss"
+        self.faiss_dir.mkdir(parents=True, exist_ok=True)
 
         self.embedding_dim = embedding_dim
-        self.faiss_index_file = self.index_dir / "faiss_index.bin"
-        self.embeddings_file = self.index_dir / "embeddings.npy"
-        self.metadata_file = self.index_dir / "faiss_metadata.json"
+        self.faiss_index_file = self.faiss_dir / "faiss_index.bin"
+        self.embeddings_file = self.faiss_dir / "embeddings.npy"
+        self.metadata_file = self.faiss_dir / "faiss_metadata.json"
 
         # In-memory storage
         self.embeddings = []
@@ -860,15 +861,15 @@ class BM25SIndexer:
 
     def __init__(self, index_dir: Path):
         self.index_dir = index_dir
-        self.index_dir.mkdir(parents=True, exist_ok=True)
+        self.bm25s_dir = self.index_dir / "bm25s"
+        self.bm25s_dir.mkdir(parents=True, exist_ok=True)
 
         # BM25S index files
-        self.bm25_index_file = self.index_dir / "bm25s_index.pkl"
-        self.bm25_corpus_file = self.index_dir / "bm25s_corpus.pkl"
-        self.bm25_metadata_file = self.index_dir / "bm25s_metadata.json"
-        self.stopwords_file = self.index_dir / "custom_stopwords.json"
+        self.bm25_index_file = self.bm25s_dir / "bm25s_index.pkl"
+        self.bm25_corpus_file = self.bm25s_dir / "bm25s_corpus.pkl"
+        self.bm25_metadata_file = self.bm25s_dir / "bm25s_metadata.json"
         self.doc_mapping_file = (
-            self.index_dir / "bm25s_doc_mapping.json"
+            self.bm25s_dir / "bm25s_doc_mapping.json"
         )  # ID to filepath mapping
 
         # In-memory storage for batch processing
@@ -1095,7 +1096,7 @@ class BM25SIndexer:
             }
 
             # Add special characters as stopwords (they're just noise in BM25S)
-            # Based on analysis of 100 PL/SQL files from _work directory
+            # Based on analysis of 100 PL/SQL files from source directory
             special_char_stopwords = {
                 # High-frequency special characters (>100 occurrences)
                 "_",
@@ -1235,10 +1236,6 @@ class BM25SIndexer:
             self.custom_stopwords = english_stopwords.union(
                 programming_stopwords
             ).union(special_char_stopwords)
-
-            # Save custom stopwords
-            with open(self.stopwords_file, "w") as f:
-                json.dump(list(self.custom_stopwords), f, indent=2)
 
             logger.info(f"Initialized {len(self.custom_stopwords)} custom stopwords")
 
@@ -1550,10 +1547,6 @@ class BM25SIndexer:
             }
             with open(self.bm25_metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
-
-            # Save final stopwords
-            with open(self.stopwords_file, "w") as f:
-                json.dump(list(self.custom_stopwords), f, indent=2)
 
             # Save document ID to filepath mapping for query retrieval
             doc_mapping = {}
@@ -2377,10 +2370,14 @@ class ProductionEmbeddingFramework:
         # Initialize components
         self.checkpoint_manager = EmbeddingCheckpointManager(self.checkpoint_dir)
         self.ollama_processor = OllamaProcessor(model)
-        self.bm25_indexer = BM25SIndexer(self.checkpoint_dir / "search_indexes")
+        # Put search indexes directly under the base version directory
+        search_index_dir = (
+            self.checkpoint_dir.parent
+        )  # Go up from embedding_checkpoints to version dir
+        self.bm25_indexer = BM25SIndexer(search_index_dir)
         self.embedding_generator = BGEM3EmbeddingGenerator()
         self.faiss_manager = FAISSIndexManager(
-            self.checkpoint_dir / "search_indexes",
+            search_index_dir,
             embedding_dim=1024,  # BGE-M3 default dimension
         )
 
@@ -2924,8 +2921,8 @@ class ProductionEmbeddingFramework:
             if os.path.isabs(file_path):
                 full_path = Path(file_path)
             else:
-                full_path = self.work_dir / file_path.replace("_work\\", "").replace(
-                    "_work/", ""
+                full_path = self.work_dir / file_path.replace("source\\", "").replace(
+                    "source/", ""
                 )
 
             with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -3600,35 +3597,20 @@ class ProductionEmbeddingFramework:
 
 
 # CLI Interface Functions
-def setup_embedding_directories(base_dir: Path) -> Tuple[Path, Path, Path]:
-    """Set up required directories for embedding processing."""
-    work_dir = base_dir / "_work"
-    checkpoint_dir = base_dir / "embedding_checkpoints"
-    analysis_file = base_dir / "comprehensive_plsql_analysis.json"
-
-    if not work_dir.exists():
-        raise FileNotFoundError(f"Work directory not found: {work_dir}")
-
-    # Analysis file will be generated automatically if it doesn't exist
-    # (Removed the requirement check since we have built-in analyzer)
-
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    return work_dir, checkpoint_dir, analysis_file
-
-
 async def run_embedding_command(args) -> int:
     """Handle the embedding command."""
     try:
-        # Import get_data_directory from main module
-        from .main import get_data_directory
+        # Import get_data_directory from directory utilities
+        from .directory_utils import get_data_directory, setup_embedding_directories
 
         # Use version-based directory structure
         data_dir = get_data_directory()
         safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
-        base_dir = data_dir / "extracts" / safe_version
+        base_dir = data_dir / "versions" / safe_version
 
-        work_dir, checkpoint_dir, analysis_file = setup_embedding_directories(base_dir)
+        work_dir, checkpoint_dir, analysis_file = setup_embedding_directories(
+            args.version
+        )
 
         # Initialize framework
         framework = ProductionEmbeddingFramework(

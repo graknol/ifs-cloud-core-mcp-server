@@ -1,18 +1,16 @@
 """Main entry point for IFS Cloud MCP Server."""
 
-import asyncio
-import argparse
 import logging
-import os
 import sys
 import zipfile
 from pathlib import Path
-from typing import Set, Optional, Dict, Any
-from datetime import datetime
 
-from .config import ConfigManager
+from .directory_utils import (
+    get_data_directory,
+    get_supported_extensions,
+    resolve_version_to_work_directory,
+)
 from .server_fastmcp import IFSCloudMCPServer
-from .indexer import IFSCloudIndexer
 from .embedding_processor import run_embedding_command
 
 
@@ -25,39 +23,6 @@ def setup_logging(level: str = "INFO"):
             logging.StreamHandler(sys.stderr),
         ],
     )
-
-
-def get_data_directory() -> Path:
-    """Get the platform-appropriate data directory for IFS Cloud files."""
-    app_name = "ifs_cloud_mcp_server"
-
-    if sys.platform == "win32":
-        # Windows: %APPDATA%/ifs_cloud_mcp_server
-        base_path = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    elif sys.platform == "darwin":
-        # macOS: ~/Library/Application Support/ifs_cloud_mcp_server
-        base_path = Path.home() / "Library" / "Application Support"
-    else:
-        # Linux/Unix: ~/.local/share/ifs_cloud_mcp_server
-        base_path = Path(
-            os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
-        )
-
-    return base_path / app_name
-
-
-def get_supported_extensions() -> Set[str]:
-    """Get the set of file extensions that IFS Cloud MCP Server supports."""
-    return {
-        ".entity",
-        ".plsql",
-        ".views",
-        ".storage",
-        ".fragment",
-        ".client",
-        ".projection",
-        ".plsvc",
-    }
 
 
 def resolve_version_to_index_path(version: str) -> Path:
@@ -75,7 +40,7 @@ def resolve_version_to_index_path(version: str) -> Path:
     data_dir = get_data_directory()
     safe_version = "".join(c for c in version if c.isalnum() or c in "._-")
 
-    extract_path = data_dir / "extracts" / safe_version
+    extract_path = data_dir / "versions" / safe_version
     index_path = data_dir / "indexes" / safe_version
 
     if not extract_path.exists():
@@ -89,37 +54,6 @@ def resolve_version_to_index_path(version: str) -> Path:
         )
 
     return index_path
-
-
-def resolve_version_to_work_directory(version: str) -> Path:
-    """Resolve a version name to its corresponding work directory (_work).
-
-    Args:
-        version: Version identifier
-
-    Returns:
-        Path to the work directory for this version
-
-    Raises:
-        ValueError: If version doesn't exist
-    """
-    data_dir = get_data_directory()
-    safe_version = "".join(c for c in version if c.isalnum() or c in "._-")
-
-    extract_path = data_dir / "extracts" / safe_version
-    work_dir = extract_path / "_work"
-
-    if not extract_path.exists():
-        raise ValueError(
-            f"Version '{version}' not found. Available versions can be listed with: python -m src.ifs_cloud_mcp_server.main list"
-        )
-
-    if not work_dir.exists():
-        raise ValueError(
-            f"Work directory not found for version '{version}'. Expected at: {work_dir}"
-        )
-
-    return work_dir
 
 
 def extract_ifs_cloud_zip(zip_path: Path, version: str) -> Path:
@@ -147,7 +81,7 @@ def extract_ifs_cloud_zip(zip_path: Path, version: str) -> Path:
 
     # Get extraction directory
     data_dir = get_data_directory()
-    extract_dir = data_dir / "extracts" / safe_version
+    extract_dir = data_dir / "versions" / safe_version
 
     # Remove existing extraction if it exists
     if extract_dir.exists():
@@ -206,17 +140,9 @@ async def build_index_for_extract(extract_path: Path, index_path: Path) -> bool:
             f"Building search index at {index_path} for files in {extract_path}"
         )
 
-        # Create indexer
-        indexer = IFSCloudIndexer(index_path=index_path)
-
-        # Build index
-        stats = await indexer.index_directory(str(extract_path))
-
-        logging.info(f"Index built successfully:")
-        logging.info(f"  Files indexed: {stats.get('indexed', 0)}")
-        logging.info(f"  Files cached: {stats.get('cached', 0)}")
-        logging.info(f"  Files skipped: {stats.get('skipped', 0)}")
-        logging.info(f"  Errors: {stats.get('errors', 0)}")
+        # TODO: Implement proper indexing with new directory structure
+        # For now, directory structure is already created during extraction
+        logging.info(f"Directory structure ready at {extract_path}")
 
         return True
 
@@ -273,14 +199,14 @@ def handle_list_command(args) -> int:
 
     try:
         data_dir = get_data_directory()
-        extracts_dir = data_dir / "extracts"
+        versions_dir = data_dir / "versions"
         indexes_dir = data_dir / "indexes"
 
         versions = []
 
         # Scan for available versions
-        if extracts_dir.exists():
-            for version_dir in extracts_dir.iterdir():
+        if versions_dir.exists():
+            for version_dir in versions_dir.iterdir():
                 if version_dir.is_dir():
                     index_path = indexes_dir / version_dir.name
 
@@ -402,8 +328,12 @@ def handle_bm25s_reindex_command(args) -> int:
         # Files go in the version's extract directory
         data_dir = get_data_directory()
         safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
-        base_dir = data_dir / "extracts" / safe_version
-        analysis_file = base_dir / "comprehensive_plsql_analysis.json"  # Fixed filename
+        base_dir = data_dir / "versions" / safe_version
+        analysis_dir = base_dir / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        analysis_file = (
+            analysis_dir / "comprehensive_plsql_analysis.json"
+        )  # Fixed filename
         checkpoint_dir = base_dir / "embedding_checkpoints"
         logging.info(f"Using IFS Cloud version: {args.version}")
         logging.info(f"Work directory: {work_dir}")
@@ -559,9 +489,10 @@ def handle_pagerank_command(args) -> int:
         # Files go in the version's extract directory
         data_dir = get_data_directory()
         safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
-        base_dir = data_dir / "extracts" / safe_version
+        base_dir = data_dir / "versions" / safe_version
+        analysis_dir = base_dir / "analysis"
         analysis_file = (
-            base_dir / "comprehensive_plsql_analysis.json"
+            analysis_dir / "comprehensive_plsql_analysis.json"
         )  # Fixed input filename
         output_file = base_dir / "ranked.jsonl"  # Fixed output filename
         logging.info(f"Using IFS Cloud version: {args.version}")
@@ -765,8 +696,12 @@ def handle_analyze_command(args) -> int:
         # Output files go in the version's extract directory
         data_dir = get_data_directory()
         safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
-        base_dir = data_dir / "extracts" / safe_version
-        output_file = base_dir / "comprehensive_plsql_analysis.json"  # Fixed filename
+        base_dir = data_dir / "versions" / safe_version
+        analysis_dir = base_dir / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        output_file = (
+            analysis_dir / "comprehensive_plsql_analysis.json"
+        )  # Fixed filename
         logging.info(f"Using IFS Cloud version: {args.version}")
         logging.info(f"Work directory: {work_dir}")
 
@@ -887,7 +822,7 @@ def main_sync():
 
     # Parse arguments first to determine which command to run
     parser = argparse.ArgumentParser(
-        description="IFS Cloud MCP Server with Tantivy search and production database metadata extraction"
+        description="IFS Cloud MCP Server with RAG search capabilities"
     )
 
     # Add subcommands

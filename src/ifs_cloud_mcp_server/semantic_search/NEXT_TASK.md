@@ -1,1 +1,0 @@
-we also need similar embeddings for projection and client files, using their respective analyzers, but keep the summaries to the whole file and the main parts, we dont want tons of the same summaries in all files due to similar basic patterns/structures in each

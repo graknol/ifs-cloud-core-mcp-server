@@ -19,25 +19,6 @@ except ImportError:
     pass
 
 try:
-    from .indexer import IFSCloudIndexer
-
-    __all__.append("IFSCloudIndexer")
-except ImportError:
-    pass
-
-# Always make parsers available as they have no external dependencies
-from .parsers import IFSFileParser, ParsedFile
-
-__all__.extend(["IFSFileParser", "ParsedFile"])
-
-try:
-    from .config import ConfigManager
-
-    __all__.append("ConfigManager")
-except ImportError:
-    pass
-
-try:
     from .embedding_processor import ProductionEmbeddingFramework
 
     __all__.append("ProductionEmbeddingFramework")

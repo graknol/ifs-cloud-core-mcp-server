@@ -4,15 +4,10 @@ IFS Cloud MCP Server with FastMCP Framework
 Clean implementation with focused IFS development guidance tool.
 """
 
-import asyncio
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
 
 from fastmcp import FastMCP
-from .indexer import IFSCloudIndexer
-from .embedding_processor import OllamaProcessor
-from .search_engine import IFSCloudSearchEngine
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,17 +29,12 @@ class IFSCloudMCPServer:
         if data_dir:
             self.data_dir = Path(data_dir)
         else:
-            from platformdirs import user_data_dir
+            from .directory_utils import get_data_directory
 
-            self.data_dir = Path(user_data_dir("ifs-cloud-mcp-server"))
+            self.data_dir = get_data_directory()
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Using data directory: {self.data_dir}")
-
-        # Initialize components
-        self.indexer = IFSCloudIndexer(str(self.data_dir / "index"))
-        self.embedding_processor = OllamaProcessor(str(self.data_dir))
-        self.search_engine = IFSCloudSearchEngine(self.indexer)
 
         # Register tools
         self._register_tools()
@@ -242,6 +232,4 @@ PROCEDURE New___ (
 
     def cleanup(self):
         """Clean up resources."""
-        if hasattr(self, "indexer"):
-            self.indexer.close()
         logger.info("IFS Cloud MCP Server cleanup completed")

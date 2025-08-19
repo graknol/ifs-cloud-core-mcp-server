@@ -183,7 +183,8 @@ class HybridSearchEngine:
 
     def __init__(self, checkpoint_dir: Path):
         self.checkpoint_dir = Path(checkpoint_dir)
-        self.search_indexes_dir = self.checkpoint_dir / "search_indexes"
+        # Put search indexes directly under the version directory (parent of checkpoint_dir)
+        self.search_indexes_dir = self.checkpoint_dir.parent
 
         # Initialize components
         self.query_analyzer = QueryAnalyzer()

@@ -85,7 +85,7 @@ Thumbs.db
 /tmp/
 
 # Working directory
-_work/ 
+source/ 
 
 # Production data and configuration (contains sensitive information)
 production/config/database_config.py
