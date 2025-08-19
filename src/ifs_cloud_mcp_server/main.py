@@ -236,6 +236,9 @@ def handle_list_command(args) -> int:
             for version_dir in versions_dir.iterdir():
                 if version_dir.is_dir():
                     index_path = indexes_dir / version_dir.name
+                    analysis_path = (
+                        version_dir / "analysis" / "comprehensive_plsql_analysis.json"
+                    )
 
                     # Get file count
                     file_count = 0
@@ -250,11 +253,18 @@ def handle_list_command(args) -> int:
                     except:
                         created_str = "Unknown"
 
+                    # Check if analysis data exists (modern approach) or index exists (legacy)
+                    has_analysis = analysis_path.exists()
+                    has_legacy_index = index_path.exists()
+
                     version_info = {
                         "version": version_dir.name,
                         "extract_path": str(version_dir),
                         "index_path": str(index_path),
-                        "has_index": index_path.exists(),
+                        "analysis_path": str(analysis_path),
+                        "has_index": has_legacy_index,
+                        "has_analysis": has_analysis,
+                        "is_ready": has_analysis or has_legacy_index,
                         "file_count": file_count,
                         "created": created_str,
                     }
@@ -279,14 +289,25 @@ def handle_list_command(args) -> int:
                 print("Available IFS Cloud versions:")
                 print("")
                 for v in versions:
-                    status = "✅ Indexed" if v["has_index"] else "⚠️  Not indexed"
+                    if v["has_analysis"]:
+                        status = "✅ Analyzed"
+                    elif v["has_index"]:
+                        status = "🔍 Legacy indexed"
+                    else:
+                        status = "⚠️  Not analyzed"
+
                     print(f"📦 {v['version']}")
                     print(f"   Status: {status}")
                     print(f"   Files: {v['file_count']:,}")
                     print(f"   Created: {v['created']}")
-                    if v["has_index"]:
+
+                    if v["is_ready"]:
                         print(
                             f"   Command: python -m src.ifs_cloud_mcp_server.main server --version \"{v['version']}\""
+                        )
+                    else:
+                        print(
+                            f"   To analyze: python -m src.ifs_cloud_mcp_server.main analyze --version \"{v['version']}\""
                         )
                     print("")
 
@@ -297,6 +318,67 @@ def handle_list_command(args) -> int:
             print(json.dumps({"error": str(e)}))
         else:
             print(f"❌ Failed to list versions: {e}")
+        return 1
+
+
+def handle_delete_command(args) -> int:
+    """Handle the delete command - remove a version and all its data."""
+    try:
+        import shutil
+
+        data_dir = get_data_directory()
+        safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
+
+        version_dir = data_dir / "versions" / safe_version
+        index_dir = data_dir / "indexes" / safe_version
+
+        # Check if version exists
+        if not version_dir.exists() and not index_dir.exists():
+            logging.error(f"❌ Version '{args.version}' not found")
+            return 1
+
+        # Confirm deletion unless --force is used
+        if not args.force:
+            print(
+                f"⚠️  This will permanently delete version '{args.version}' and all its data:"
+            )
+            if version_dir.exists():
+                print(f"   📁 Version directory: {version_dir}")
+            if index_dir.exists():
+                print(f"   📁 Index directory: {index_dir}")
+            print()
+            response = (
+                input("Are you sure you want to continue? (y/N): ").strip().lower()
+            )
+            if response not in ("y", "yes"):
+                print("❌ Deletion cancelled")
+                return 0
+
+        deleted_items = []
+
+        # Delete version directory if it exists
+        if version_dir.exists():
+            logging.info(f"🗑️  Deleting version directory: {version_dir}")
+            shutil.rmtree(version_dir)
+            deleted_items.append(f"Version directory: {version_dir}")
+
+        # Delete index directory if it exists
+        if index_dir.exists():
+            logging.info(f"🗑️  Deleting index directory: {index_dir}")
+            shutil.rmtree(index_dir)
+            deleted_items.append(f"Index directory: {index_dir}")
+
+        if deleted_items:
+            logging.info(f"✅ Successfully deleted version '{args.version}'")
+            for item in deleted_items:
+                logging.info(f"   🗑️  Removed: {item}")
+        else:
+            logging.warning(f"⚠️  No files found for version '{args.version}'")
+
+        return 0
+
+    except Exception as e:
+        logging.error(f"❌ Failed to delete version '{args.version}': {e}")
         return 1
 
 
@@ -828,6 +910,24 @@ def main_sync():
         "--json", action="store_true", help="Output in JSON format"
     )
 
+    # Delete command (synchronous)
+    delete_parser = subparsers.add_parser(
+        "delete",
+        help="Delete a version and all its data (version directory and indexes)",
+    )
+    delete_parser.add_argument(
+        "--version", required=True, help="IFS Cloud version to delete (e.g., 25.1.0)"
+    )
+    delete_parser.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt"
+    )
+    delete_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO)",
+    )
+
     # Analyze command (synchronous) - Generate comprehensive file analysis
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -981,6 +1081,10 @@ def main_sync():
     elif getattr(args, "command", None) == "list":
         # List command is synchronous
         return handle_list_command(args)
+    elif getattr(args, "command", None) == "delete":
+        # Delete command is synchronous
+        setup_logging(args.log_level)
+        return handle_delete_command(args)
     elif getattr(args, "command", None) == "analyze":
         # Analyze command is synchronous
         setup_logging(args.log_level)
