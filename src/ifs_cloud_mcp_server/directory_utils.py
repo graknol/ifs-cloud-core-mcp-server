@@ -51,7 +51,7 @@ def resolve_version_to_work_directory(version: str) -> Path:
         ValueError: If multiple ambiguous work directories are found
     """
     data_dir = get_data_directory()
-    extract_path = data_dir / "versions" / version
+    extract_path = data_dir / "versions" / version / "source"
 
     if not extract_path.exists():
         available_versions = (
@@ -68,42 +68,37 @@ def resolve_version_to_work_directory(version: str) -> Path:
         Recursively search for IFS work directory containing fndbas and accrul.
 
         The algorithm:
-        1. If there's only one subdirectory, descend into it
-        2. Continue until we find a directory structure with both fndbas and accrul
-        3. Return that directory path
+        1. First check if current directory contains fndbas and accrul - if so, return it
+        2. If there's exactly one subdirectory, descend into it
+        3. If multiple subdirectories are found, fail (return false/raise error)
+        4. Continue until we find a directory with both components
         """
+        logger.debug(f"Searching for IFS work directory in: {current_path}")
+
+        # First check if current directory contains the required components
+        if (current_path / "fndbas").exists() and (current_path / "accrul").exists():
+            logger.info(f"Found IFS work directory: {current_path}")
+            return current_path
+
         # Get all subdirectories (exclude files)
         subdirs = [d for d in current_path.iterdir() if d.is_dir()]
 
-        # If there's exactly one subdirectory, keep going down
-        if len(subdirs) == 1:
-            return _find_ifs_work_directory(subdirs[0])
-
-        # Check each subdirectory for the presence of "source" directory
-        # and validate it contains both fndbas and accrul
-        work_dirs_found = []
-        for subdir in subdirs:
-            potential_work = subdir / "source"
-            if potential_work.exists() and potential_work.is_dir():
-                fndbas_exists = (potential_work / "fndbas").exists()
-                accrul_exists = (potential_work / "accrul").exists()
-
-                if fndbas_exists and accrul_exists:
-                    work_dirs_found.append(potential_work)
-
-        if len(work_dirs_found) == 1:
-            return work_dirs_found[0]
-        elif len(work_dirs_found) > 1:
-            dirs_str = "\n  ".join(str(d) for d in work_dirs_found)
-            raise ValueError(
-                f"Multiple valid work directories found. Please specify more precisely:\n  {dirs_str}"
-            )
-        else:
-            # No valid work directories found
+        if not subdirs:
             raise FileNotFoundError(
-                f"No valid work directory found in {current_path}. "
-                f"Expected to find a 'source' directory containing both 'fndbas' and 'accrul' subdirectories."
+                f"No subdirectories found in {current_path}. "
+                f"Expected to find a directory containing both 'fndbas' and 'accrul' subdirectories."
             )
+
+        # If multiple subdirectories are found, fail
+        if len(subdirs) > 1:
+            subdir_names = [d.name for d in subdirs]
+            raise ValueError(
+                f"Multiple subdirectories found in {current_path}: {subdir_names}. "
+                f"Expected exactly one subdirectory or a directory with fndbas and accrul."
+            )
+
+        # Exactly one subdirectory - recursively search it
+        return _find_ifs_work_directory(subdirs[0])
 
     try:
         return _find_ifs_work_directory(extract_path)
