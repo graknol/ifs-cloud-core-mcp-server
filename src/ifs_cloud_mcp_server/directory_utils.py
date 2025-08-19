@@ -145,22 +145,6 @@ def get_version_embedding_checkpoints_directory(version: str) -> Path:
     return checkpoint_dir
 
 
-def get_version_faiss_directory(version: str) -> Path:
-    """Get the FAISS index directory for a specific version."""
-    base_dir = get_version_base_directory(version)
-    faiss_dir = base_dir / "faiss"
-    faiss_dir.mkdir(parents=True, exist_ok=True)
-    return faiss_dir
-
-
-def get_version_bm25s_directory(version: str) -> Path:
-    """Get the BM25S index directory for a specific version."""
-    base_dir = get_version_base_directory(version)
-    bm25s_dir = base_dir / "bm25s"
-    bm25s_dir.mkdir(parents=True, exist_ok=True)
-    return bm25s_dir
-
-
 def setup_embedding_directories(version: str) -> Tuple[Path, Path, Path]:
     """
     Set up required directories for embedding processing for a specific version.
@@ -191,17 +175,8 @@ def get_supported_extensions() -> Set[str]:
         ".plsql",
         ".views",
         ".storage",
-        ".cdb",
-        ".fdb",
-        ".apy",
-        ".apv",
-        ".svc",
-        ".rpt",
-        ".cpi",
-        ".bi",
         ".fragment",
         ".projection",
-        ".iac",
         ".client",
     }
 
@@ -215,35 +190,3 @@ def list_available_versions() -> List[str]:
         return []
 
     return [d.name for d in versions_dir.iterdir() if d.is_dir()]
-
-
-def get_version_indexes_directory(version: str) -> Path:
-    """Get the legacy indexes directory for compatibility (if needed)."""
-    data_dir = get_data_directory()
-    return data_dir / "indexes" / version
-
-
-def validate_version_structure(version: str) -> bool:
-    """
-    Validate that a version has the expected directory structure.
-
-    Args:
-        version: The version identifier
-
-    Returns:
-        True if valid structure, False otherwise
-    """
-    try:
-        base_dir = get_version_base_directory(version)
-        work_dir = get_version_source_directory(version)
-
-        # Check that required components exist
-        fndbas_exists = (work_dir / "fndbas").exists()
-        accrul_exists = (work_dir / "accrul").exists()
-
-        return (
-            base_dir.exists() and work_dir.exists() and fndbas_exists and accrul_exists
-        )
-
-    except (FileNotFoundError, ValueError):
-        return False

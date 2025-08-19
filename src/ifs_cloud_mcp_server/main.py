@@ -2,7 +2,6 @@
 
 import logging
 import sys
-import zipfile
 from pathlib import Path
 
 from .directory_utils import (
@@ -10,8 +9,9 @@ from .directory_utils import (
     get_supported_extensions,
     resolve_version_to_work_directory,
 )
-from .server_fastmcp import IFSCloudMCPServer
-from .embedding_processor import run_embedding_command
+
+# Lazy import: from .server_fastmcp import IFSCloudMCPServer
+# Lazy import: from .embedding_processor import run_embedding_command
 
 
 def setup_logging(level: str = "INFO"):
@@ -56,6 +56,54 @@ def resolve_version_to_index_path(version: str) -> Path:
     return index_path
 
 
+def get_version_from_zip(zip_path: Path) -> str:
+    """Extract version from version.txt file inside the ZIP.
+
+    Args:
+        zip_path: Path to the ZIP file
+
+    Returns:
+        Version string extracted from checkout/fndbas/source/version.txt
+
+    Raises:
+        FileNotFoundError: If ZIP file doesn't exist
+        ValueError: If version.txt is not found or version cannot be determined
+    """
+    if not zip_path.exists():
+        raise FileNotFoundError(f"ZIP file not found: {zip_path}")
+
+    import zipfile
+
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        # Look for version.txt in the expected location
+        version_file_path = "checkout/fndbas/source/version.txt"
+
+        if version_file_path not in zip_ref.namelist():
+            raise ValueError(f"Version file not found: {version_file_path}")
+
+        try:
+            with zip_ref.open(version_file_path) as version_file:
+                version_content = version_file.read().decode("utf-8").strip()
+
+            # Extract version number - should be in format like "25.1.0" or similar
+            # The version.txt might have additional content, so we need to extract just the version
+            lines = version_content.splitlines()
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith("#") and not line.startswith("//"):
+                    # Take the first non-comment, non-empty line as version
+                    version = line.split()[
+                        0
+                    ]  # Take first word in case there are additional details
+                    if version:
+                        return version
+
+            raise ValueError("No valid version found in version.txt")
+
+        except Exception as e:
+            raise ValueError(f"Failed to read version from {version_file_path}: {e}")
+
+
 def extract_ifs_cloud_zip(zip_path: Path, version: str) -> Path:
     """Extract IFS Cloud ZIP file to versioned directory with only supported files.
 
@@ -97,6 +145,8 @@ def extract_ifs_cloud_zip(zip_path: Path, version: str) -> Path:
     logging.info(f"Extracting IFS Cloud files from {zip_path} to {extract_dir}")
     logging.info(f"Supported file types: {', '.join(sorted(supported_extensions))}")
 
+    import zipfile
+
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         for file_info in zip_ref.infolist():
             # Skip directories
@@ -105,11 +155,24 @@ def extract_ifs_cloud_zip(zip_path: Path, version: str) -> Path:
 
             file_path = Path(file_info.filename)
 
+            # Skip files not under checkout directory
+            if not file_info.filename.startswith("checkout/"):
+                continue
+
             # Check if file has supported extension
             if file_path.suffix.lower() in supported_extensions:
                 try:
-                    # Extract file maintaining directory structure
-                    zip_ref.extract(file_info, extract_dir)
+                    # Remove "checkout/" from the path and extract to source/
+                    relative_path = Path(*file_path.parts[1:])  # Skip "checkout"
+                    target_path = extract_dir / "source" / relative_path
+
+                    # Create target directory if it doesn't exist
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    # Extract file data and write to target location
+                    with zip_ref.open(file_info) as source_file:
+                        with open(target_path, "wb") as target_file:
+                            target_file.write(source_file.read())
                     extracted_count += 1
 
                     if extracted_count % 100 == 0:
@@ -125,67 +188,31 @@ def extract_ifs_cloud_zip(zip_path: Path, version: str) -> Path:
     return extract_dir
 
 
-async def build_index_for_extract(extract_path: Path, index_path: Path) -> bool:
-    """Build search index for extracted IFS Cloud files.
-
-    Args:
-        extract_path: Path to extracted files
-        index_path: Path where index should be stored
-
-    Returns:
-        True if indexing was successful
-    """
-    try:
-        logging.info(
-            f"Building search index at {index_path} for files in {extract_path}"
-        )
-
-        # TODO: Implement proper indexing with new directory structure
-        # For now, directory structure is already created during extraction
-        logging.info(f"Directory structure ready at {extract_path}")
-
-        return True
-
-    except Exception as e:
-        logging.error(f"Failed to build index: {e}")
-        return False
-
-
-async def handle_import_command(args) -> int:
-    """Handle the import command."""
+def handle_import_command(args) -> int:
+    """Handle the import command - auto-detect version and extract files to version directory."""
     try:
         zip_path = Path(args.zip_file)
-        version = args.version
 
-        # Extract ZIP file
+        # Auto-detect version from ZIP file
+        logging.info(f"🔍 Detecting version from {zip_path}")
+        version = get_version_from_zip(zip_path)
+        logging.info(f"📋 Detected version: {version}")
+
+        # Extract ZIP file to version directory
         extract_path = extract_ifs_cloud_zip(zip_path, version)
 
-        # Determine index path
-        if args.index_path:
-            index_path = Path(args.index_path)
-        else:
-            data_dir = get_data_directory()
-            safe_version = "".join(c for c in version if c.isalnum() or c in "._-")
-            index_path = data_dir / "indexes" / safe_version
-
-        # Build index
-        index_path.mkdir(parents=True, exist_ok=True)
-        success = await build_index_for_extract(extract_path, index_path)
-
-        if success:
-            logging.info(f"✅ Import completed successfully!")
-            logging.info(f"📁 Extracted files: {extract_path}")
-            logging.info(f"🔍 Search index: {index_path}")
-            logging.info(f"🏷️  Version: {version}")
-            logging.info("")
-            logging.info("To use this version with the MCP server:")
-            logging.info(
-                f'  python -m src.ifs_cloud_mcp_server.main server --version "{version}"'
-            )
-            return 0
-        else:
-            logging.error("❌ Import failed during indexing")
-            return 1
+        logging.info(f"✅ Import completed successfully!")
+        logging.info(f"📁 Extracted files: {extract_path}")
+        logging.info(f"🏷️  Version: {version}")
+        logging.info("")
+        logging.info("Files extracted successfully. To work with this version:")
+        logging.info(
+            f'  Analyze:    python -m src.ifs_cloud_mcp_server.main analyze --version "{version}"'
+        )
+        logging.info(
+            f'  MCP Server: python -m src.ifs_cloud_mcp_server.main server --version "{version}"'
+        )
+        return 0
 
     except Exception as e:
         logging.error(f"❌ Import failed: {e}")
@@ -283,6 +310,9 @@ def handle_server_command(args) -> int:
 
         # Create index directory if it doesn't exist
         index_path.mkdir(parents=True, exist_ok=True)
+
+        # Lazy import to avoid CLI slowdown
+        from .server_fastmcp import IFSCloudMCPServer
 
         # Create server
         server = IFSCloudMCPServer(
@@ -792,34 +822,6 @@ def main_sync():
     """Synchronous main entry point for console scripts."""
     import argparse
 
-    # Check if we're being called in an asyncio context
-    import asyncio
-
-    try:
-        loop = asyncio.get_running_loop()
-        # If we get here, we're in an asyncio context
-        print(
-            "❌ Error: IFS Cloud MCP Server cannot be run from within an asyncio context.",
-            file=sys.stderr,
-        )
-        print("", file=sys.stderr)
-        print("This typically happens when:", file=sys.stderr)
-        print("  1. Running from a Jupyter notebook or IPython", file=sys.stderr)
-        print("  2. Being called from within an async function", file=sys.stderr)
-        print("  3. Called by an MCP client that uses asyncio", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("Solutions:", file=sys.stderr)
-        print("  1. Run from a regular command line terminal", file=sys.stderr)
-        print("  2. Use the standalone wrapper script", file=sys.stderr)
-        print(
-            "  3. Ensure your MCP client runs the server as a subprocess",
-            file=sys.stderr,
-        )
-        return 1
-    except RuntimeError:
-        # No event loop, we're good to proceed
-        pass
-
     # Parse arguments first to determine which command to run
     parser = argparse.ArgumentParser(
         description="IFS Cloud MCP Server with RAG search capabilities"
@@ -830,13 +832,10 @@ def main_sync():
 
     # Import command (requires async)
     import_parser = subparsers.add_parser(
-        "import", help="Import IFS Cloud ZIP file and create search index"
+        "import",
+        help="Import IFS Cloud ZIP file to version directory (version auto-detected)",
     )
     import_parser.add_argument("zip_file", help="Path to IFS Cloud ZIP file")
-    import_parser.add_argument("version", help="IFS Cloud version (e.g., 25.1.0)")
-    import_parser.add_argument(
-        "--index-path", help="Custom path for search index (optional)"
-    )
     import_parser.add_argument(
         "--log-level",
         default="INFO",
@@ -892,10 +891,43 @@ def main_sync():
         help="Log level (default: INFO)",
     )
 
+    # PageRank calculation command (synchronous) - Calculate PageRank scores for files
+    pagerank_parser = subparsers.add_parser(
+        "calculate-pagerank",
+        help="Calculate PageRank scores based on file interdependencies",
+    )
+    pagerank_parser.add_argument(
+        "--version", required=True, help="IFS Cloud version to analyze (e.g., 25.1.0)"
+    )
+    pagerank_parser.add_argument(
+        "--damping-factor",
+        type=float,
+        default=0.85,
+        help="PageRank damping factor (default: 0.85)",
+    )
+    pagerank_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=100,
+        help="Maximum PageRank iterations (default: 100)",
+    )
+    pagerank_parser.add_argument(
+        "--convergence-threshold",
+        type=float,
+        default=1e-6,
+        help="PageRank convergence threshold (default: 1e-6)",
+    )
+    pagerank_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO)",
+    )
+
     # Embedding command (requires async) - Create embeddings using production framework
     embedding_parser = subparsers.add_parser(
         "embed",
-        help="Create embeddings using production framework with PageRank prioritization",
+        help="⚠️  RESOURCE INTENSIVE: Create embeddings (requires NVIDIA GPU). Embeddings are published to GitHub releases and downloaded at runtime - only run if you need to generate new embeddings",
     )
     embedding_parser.add_argument(
         "--version", required=True, help="IFS Cloud version to process (e.g., 25.1.0)"
@@ -942,48 +974,18 @@ def main_sync():
         help="Log level (default: INFO)",
     )
 
-    # PageRank calculation command (synchronous) - Calculate PageRank scores for files
-    pagerank_parser = subparsers.add_parser(
-        "calculate-pagerank",
-        help="Calculate PageRank scores based on file interdependencies and save to ranked.jsonl",
-    )
-    pagerank_parser.add_argument(
-        "--version", required=True, help="IFS Cloud version to analyze (e.g., 25.1.0)"
-    )
-    pagerank_parser.add_argument(
-        "--damping-factor",
-        type=float,
-        default=0.85,
-        help="PageRank damping factor (default: 0.85)",
-    )
-    pagerank_parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=100,
-        help="Maximum PageRank iterations (default: 100)",
-    )
-    pagerank_parser.add_argument(
-        "--convergence-threshold",
-        type=float,
-        default=1e-6,
-        help="PageRank convergence threshold (default: 1e-6)",
-    )
-    pagerank_parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Log level (default: INFO)",
-    )
-
     args = parser.parse_args()
 
     # Route to appropriate handler based on command
     if getattr(args, "command", None) == "import":
-        # Import command requires async
+        # Import command is now synchronous (just file extraction)
         setup_logging(args.log_level)
-        return asyncio.run(handle_import_command(args))
+        return handle_import_command(args)
     elif getattr(args, "command", None) == "embed":
-        # Embedding command requires async
+        # Embedding command requires async - lazy import to avoid CLI slowdown
+        import asyncio
+        from .embedding_processor import run_embedding_command
+
         setup_logging(args.log_level)
         return asyncio.run(run_embedding_command(args))
     elif getattr(args, "command", None) == "reindex-bm25s":

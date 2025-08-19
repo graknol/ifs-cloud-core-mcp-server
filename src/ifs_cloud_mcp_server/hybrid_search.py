@@ -15,13 +15,15 @@ Architecture:
 """
 
 import logging
+import json
 import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
 
-import numpy as np
+# Import numpy lazily to avoid CLI slowdown
+# import numpy as np  # Moved to lazy loading
 from flashrank import Ranker, RerankRequest
 
 from .embedding_processor import (
@@ -41,6 +43,52 @@ class QueryType(Enum):
     SEMANTIC = "semantic"  # Business logic, functionality
     CODE_PATTERN = "code_pattern"  # SQL queries, error patterns
     MIXED = "mixed"  # Combination of above
+
+
+@dataclass
+class SearchConfig:
+    """Configuration options for search requests."""
+
+    preset_name: str = ""
+
+    # Performance settings
+    enable_faiss: bool = True  # Disable for slower hardware (semantic search)
+    enable_flashrank: bool = True  # Disable for slower hardware (neural reranking)
+
+    # Search behavior
+    fetch_multiplier: int = 2  # How many extra results to fetch before filtering
+    min_score_threshold: float = 0.0  # Minimum score to include in results
+
+    # Hardware optimization presets
+    @classmethod
+    def fast_hardware(cls) -> "SearchConfig":
+        """Full features for fast hardware with GPU."""
+        return cls(
+            preset_name="fast_hardware",
+            enable_faiss=True,
+            enable_flashrank=True,
+            fetch_multiplier=3,
+        )
+
+    @classmethod
+    def medium_hardware(cls) -> "SearchConfig":
+        """Balanced for medium hardware - hybrid without FlashRank."""
+        return cls(
+            preset_name="medium_hardware",
+            enable_faiss=True,
+            enable_flashrank=False,
+            fetch_multiplier=2,
+        )
+
+    @classmethod
+    def slow_hardware(cls) -> "SearchConfig":
+        """Optimized for slow hardware - BM25S + PageRank only."""
+        return cls(
+            preset_name="slow_hardware",
+            enable_faiss=False,
+            enable_flashrank=False,
+            fetch_multiplier=1,  # Don't over-fetch on slow hardware
+        )
 
 
 @dataclass
@@ -75,6 +123,7 @@ class SearchResponse:
     faiss_count: int
     rerank_applied: bool
     suggestions: List[str] = None
+    search_config: Optional["SearchConfig"] = None
 
 
 class QueryAnalyzer:
@@ -201,8 +250,25 @@ class HybridSearchEngine:
         self._document_cache = {}
         self._embedding_cache = {}
 
+        # Lazy loading flag
+        self._np_loaded = False
+
         # Initialize search components
         self._initialize_search_components()
+
+    def _ensure_numpy_loaded(self):
+        """Lazily load numpy when needed."""
+        if not self._np_loaded:
+            try:
+                global np
+                import numpy as np
+
+                self._np_loaded = True
+                logger.debug("📦 NumPy loaded for hybrid search")
+            except ImportError:
+                raise ImportError(
+                    "NumPy is required but not installed. Install with: pip install numpy"
+                )
 
     def _initialize_search_components(self) -> bool:
         """Initialize BM25S, FAISS, and FlashRank components."""
@@ -243,54 +309,136 @@ class HybridSearchEngine:
         self,
         query: str,
         top_k: int = 10,
-        enable_rerank: bool = True,
+        config: Optional[SearchConfig] = None,
+        enable_rerank: Optional[bool] = None,
+        enable_faiss: Optional[bool] = None,
         explain_results: bool = False,
     ) -> SearchResponse:
         """
-        Perform hybrid search combining BM25S and FAISS with FlashRank fusion.
+        Perform hybrid search with configurable performance options.
 
         Args:
             query: Search query
             top_k: Number of results to return
-            enable_rerank: Whether to apply FlashRank reranking
+            config: Search configuration (overrides individual enable_* parameters)
+            enable_rerank: Whether to apply FlashRank reranking (legacy parameter)
+            enable_faiss: Whether to use FAISS semantic search (legacy parameter)
             explain_results: Whether to include detailed explanations
+
+        Performance Modes:
+            - Fast hardware: SearchConfig.fast_hardware() - Full features
+            - Medium hardware: SearchConfig.medium_hardware() - No FlashRank
+            - Slow hardware: SearchConfig.slow_hardware() - BM25S + PageRank only
         """
+        # Use config if provided, otherwise fall back to legacy parameters
+        if config is None:
+            config = SearchConfig(
+                enable_faiss=enable_faiss if enable_faiss is not None else True,
+                enable_flashrank=enable_rerank if enable_rerank is not None else True,
+            )
+
         start_time = time.time()
 
-        # Step 1: Analyze query
+        # Step 1: Analyze query to get search weights
         query_type, analysis = self.query_analyzer.analyze_query(query)
+        bm25_weight = analysis["search_weights"]["bm25s"]
+        faiss_weight = analysis["search_weights"]["faiss"]
+
+        # Adjust weights if FAISS is disabled
+        if not config.enable_faiss:
+            bm25_weight = 1.0
+            faiss_weight = 0.0
+            logger.info(f"🔍 FAISS disabled - using BM25S only")
+        else:
+            logger.info(
+                f"🔍 Query type: {query_type.value}, BM25S: {bm25_weight:.1f}, FAISS: {faiss_weight:.1f}"
+            )
+
+        # Step 2: Fetch results from enabled sources
+        fetch_limit = top_k * config.fetch_multiplier
+        bm25_results = self._search_bm25s(query, analysis, fetch_limit)
+
+        if config.enable_faiss:
+            faiss_results = self._search_faiss(query, analysis, fetch_limit)
+        else:
+            faiss_results = []
+
         logger.info(
-            f"🔍 Query type: {query_type.value}, weights: {analysis['search_weights']}"
+            f"📊 Fetched BM25S: {len(bm25_results)}, FAISS: {len(faiss_results)}"
         )
 
-        # Step 2: Parallel searches
-        bm25_results = self._search_bm25s(
-            query, analysis, top_k * 2
-        )  # Get more for fusion
-        faiss_results = self._search_faiss(query, analysis, top_k * 2)
+        # Step 3: Apply PageRank boosting to each result set
+        bm25_boosted = self._apply_pagerank_boosting(bm25_results)
+        if config.enable_faiss:
+            faiss_boosted = self._apply_pagerank_boosting(faiss_results)
+        else:
+            faiss_boosted = []
 
-        # Step 3: Combine and deduplicate results
-        combined_results = self._combine_results(bm25_results, faiss_results, analysis)
+        # Step 4: Calculate how many results to take from each source
+        if config.enable_faiss:
+            # Respect ColBERT weights to get exactly top_k total documents
+            total_weight = bm25_weight + faiss_weight
+            bm25_count = int((bm25_weight / total_weight) * top_k)
+            faiss_count = top_k - bm25_count  # Ensure exact total
+        else:
+            # FAISS disabled - take all from BM25S
+            bm25_count = top_k
+            faiss_count = 0
 
-        # Step 4: Apply FlashRank reranking
-        if enable_rerank and len(combined_results) > 1:
-            reranked_results = self._rerank_with_flashrank(query, combined_results)
-            fusion_method = "flashrank"
+        logger.info(
+            f"📊 Taking BM25S: {bm25_count}, FAISS: {faiss_count} (total: {top_k})"
+        )
+
+        # Step 5: Select weighted results from each source
+        selected_bm25 = bm25_boosted[:bm25_count]
+        selected_faiss = faiss_boosted[:faiss_count] if config.enable_faiss else []
+
+        # Step 6: Combine selected results, handling duplicates
+        combined_results = self._merge_weighted_results(selected_bm25, selected_faiss)
+
+        # Step 7: Apply FlashRank for final ordering (if enabled)
+        if config.enable_flashrank and len(combined_results) > 1:
+            final_results = self._rerank_with_flashrank(query, combined_results)
+            if config.enable_faiss:
+                fusion_method = "pagerank_colbert_flashrank"
+            else:
+                fusion_method = "pagerank_bm25s_flashrank"
             rerank_applied = True
         else:
-            reranked_results = combined_results
-            fusion_method = "weighted_score"
+            final_results = combined_results
+            if config.enable_faiss:
+                fusion_method = "pagerank_colbert_weighted"
+            else:
+                fusion_method = "pagerank_bm25s_only"
             rerank_applied = False
 
-        # Step 5: Take top K results
-        final_results = reranked_results[:top_k]
+        # Step 8: Take exactly top_k results
+        final_results = final_results[:top_k]
 
-        # Step 6: Enrich results with explanations
+        # Apply score threshold filtering if configured
+        if config.min_score_threshold > 0:
+            final_results = [
+                r for r in final_results if r.score >= config.min_score_threshold
+            ]
+
+        # Step 9: Enrich results with explanations
         if explain_results:
             final_results = self._add_explanations(final_results, query, analysis)
 
-        # Step 7: Build response
+        # Step 10: Build response
         search_time = time.time() - start_time
+
+        # Determine search mode for reporting
+        if config.enable_faiss and config.enable_flashrank:
+            search_mode = "Full Hybrid (BM25S + FAISS + PageRank + FlashRank)"
+        elif config.enable_faiss and not config.enable_flashrank:
+            search_mode = "Hybrid without FlashRank (BM25S + FAISS + PageRank)"
+        elif not config.enable_faiss and config.enable_flashrank:
+            search_mode = "BM25S with FlashRank (BM25S + PageRank + FlashRank)"
+        else:
+            search_mode = "BM25S Only (BM25S + PageRank)"
+
+        logger.info(f"🎯 Search mode: {search_mode}")
 
         response = SearchResponse(
             query=query,
@@ -303,6 +451,7 @@ class HybridSearchEngine:
             faiss_count=len(faiss_results),
             rerank_applied=rerank_applied,
             suggestions=analysis.get("suggested_expansions", []),
+            search_config=config,
         )
 
         logger.info(
@@ -369,6 +518,7 @@ class HybridSearchEngine:
                 return []
 
             # Search FAISS index
+            self._ensure_numpy_loaded()
             query_vec = np.array([query_embedding], dtype=np.float32)
             scores, indices = self.faiss_manager.faiss_index.search(query_vec, top_k)
 
@@ -397,6 +547,113 @@ class HybridSearchEngine:
         except Exception as e:
             logger.error(f"FAISS search failed: {e}")
             return []
+
+    def _apply_pagerank_boosting(
+        self, results: List[SearchResult]
+    ) -> List[SearchResult]:
+        """Apply PageRank boosting to search results."""
+        if not results:
+            return results
+
+        # Load PageRank scores if available
+        pagerank_scores = self._load_pagerank_scores()
+        if not pagerank_scores:
+            logger.debug("No PageRank scores available, returning results unchanged")
+            return sorted(results, key=lambda x: x.score, reverse=True)
+
+        # Apply PageRank boosting
+        boosted_results = []
+        for result in results:
+            # Get PageRank boost for this file
+            pagerank_boost = pagerank_scores.get(result.file_path, 0.0)
+
+            # Apply boost: base_score * (1 + pagerank_boost)
+            # PageRank scores are typically 0.0-1.0, so this gives 1x-2x multiplier
+            boosted_score = result.score * (1.0 + pagerank_boost)
+
+            # Create boosted result
+            boosted_result = SearchResult(
+                doc_id=result.doc_id,
+                file_path=result.file_path,
+                file_name=result.file_name,
+                api_name=result.api_name,
+                rank=result.rank,
+                score=boosted_score,
+                source=result.source,
+                title=result.title,
+                snippet=result.snippet,
+                explanation=f"{result.explanation} (PageRank boost: {pagerank_boost:.3f})",
+                match_type=result.match_type,
+            )
+            boosted_results.append(boosted_result)
+
+        # Sort by boosted scores
+        boosted_results.sort(key=lambda x: x.score, reverse=True)
+        logger.debug(f"Applied PageRank boosting to {len(boosted_results)} results")
+        return boosted_results
+
+    def _load_pagerank_scores(self) -> Dict[str, float]:
+        """Load PageRank scores from ranked.jsonl file."""
+        try:
+            # Look for PageRank file in parent directory
+            pagerank_file = self.checkpoint_dir.parent / "ranked.jsonl"
+            if not pagerank_file.exists():
+                return {}
+
+            scores = {}
+            with open(pagerank_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        data = json.loads(line)
+                        file_path = data.get("relative_path") or data.get(
+                            "file_path", ""
+                        )
+                        pagerank_score = data.get("pagerank_score", 0.0)
+                        if file_path and isinstance(pagerank_score, (int, float)):
+                            # Normalize PageRank score to 0.0-1.0 range for boosting
+                            normalized_score = min(1.0, max(0.0, float(pagerank_score)))
+                            scores[file_path] = normalized_score
+
+            logger.info(f"Loaded PageRank scores for {len(scores)} files")
+            return scores
+
+        except Exception as e:
+            logger.warning(f"Failed to load PageRank scores: {e}")
+            return {}
+
+    def _merge_weighted_results(
+        self, bm25_results: List[SearchResult], faiss_results: List[SearchResult]
+    ) -> List[SearchResult]:
+        """Merge results from both sources, handling duplicates."""
+        seen_files = set()
+        merged_results = []
+
+        # Add BM25S results first (they've been pre-selected by count)
+        for result in bm25_results:
+            if result.file_path not in seen_files:
+                seen_files.add(result.file_path)
+                merged_results.append(result)
+
+        # Add FAISS results, handling duplicates
+        for result in faiss_results:
+            if result.file_path not in seen_files:
+                seen_files.add(result.file_path)
+                merged_results.append(result)
+            else:
+                # File already exists, boost the existing result
+                for existing in merged_results:
+                    if existing.file_path == result.file_path:
+                        # Average the scores and mark as hybrid
+                        existing.score = (existing.score + result.score) / 2
+                        existing.source = "hybrid"
+                        existing.match_type = "mixed"
+                        existing.explanation += f" + {result.source} match"
+                        break
+
+        # Sort by final scores
+        merged_results.sort(key=lambda x: x.score, reverse=True)
+        logger.debug(f"Merged results: {len(merged_results)} unique files")
+        return merged_results
 
     def _combine_results(
         self,

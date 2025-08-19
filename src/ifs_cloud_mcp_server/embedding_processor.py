@@ -17,11 +17,9 @@ The framework prepares data for ColBERT hybrid search combining:
 - Late interaction fusion for optimal relevance
 """
 
-import asyncio
 import json
 import logging
 import subprocess
-import sys
 import time
 import re
 import os
@@ -29,14 +27,12 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any, Tuple
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import pickle
 
-# Search engine imports
+# Search engine imports - using lazy loading to avoid CLI slowdown
 try:
-    import faiss
-    import numpy as np
+    # Only import lightweight dependencies at module level
     import bm25s
     import torch
     from transformers import AutoTokenizer, AutoModel
@@ -740,6 +736,38 @@ class FAISSIndexManager:
         self.embedding_metadata = []
         self.faiss_index = None
 
+        # Lazy loading flags
+        self._faiss_loaded = False
+        self._np_loaded = False
+
+    def _ensure_faiss_loaded(self):
+        """Lazily load FAISS when needed."""
+        if not self._faiss_loaded:
+            try:
+                global faiss
+                import faiss
+
+                self._faiss_loaded = True
+                logger.debug("📦 FAISS loaded successfully")
+            except ImportError:
+                raise ImportError(
+                    "FAISS is required but not installed. Install with: pip install faiss-cpu"
+                )
+
+    def _ensure_numpy_loaded(self):
+        """Lazily load numpy when needed."""
+        if not self._np_loaded:
+            try:
+                global np
+                import numpy as np
+
+                self._np_loaded = True
+                logger.debug("📦 NumPy loaded successfully")
+            except ImportError:
+                raise ImportError(
+                    "NumPy is required but not installed. Install with: pip install numpy"
+                )
+
     def add_embedding(self, embedding: List[float], metadata: dict) -> None:
         """Add an embedding and its metadata to the index."""
         logger.debug(
@@ -794,6 +822,8 @@ class FAISSIndexManager:
                 self.embedding_dim = most_common_dim
 
             # Convert embeddings to numpy array
+            self._ensure_numpy_loaded()
+            self._ensure_faiss_loaded()
             embeddings_np = np.array(valid_embeddings, dtype=np.float32)
 
             # Create FAISS index (using IndexFlatIP for cosine similarity)
@@ -840,6 +870,8 @@ class FAISSIndexManager:
                 and self.embeddings_file.exists()
                 and self.metadata_file.exists()
             ):
+                self._ensure_faiss_loaded()
+                self._ensure_numpy_loaded()
 
                 self.faiss_index = faiss.read_index(str(self.faiss_index_file))
                 embeddings_np = np.load(self.embeddings_file)
