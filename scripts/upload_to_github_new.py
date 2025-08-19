@@ -198,7 +198,7 @@ Files included:
                 for file_path, description in safe_files:
                     if file_path.exists():
                         relative_path = file_path.relative_to(version_dir)
-                        manifest_content += f"- {relative_path} - {description}\n"
+                        manifest_content += f"- {relative_path} - {description}\\n"
 
                 zipf.writestr("README.txt", manifest_content)
 
@@ -228,7 +228,7 @@ Files included:
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             print("❌ GitHub CLI not found!")
-            print("\nPlease install GitHub CLI:")
+            print("\\nPlease install GitHub CLI:")
             print("- Windows: winget install GitHub.cli")
             print("- macOS: brew install gh")
             print("- Linux: https://cli.github.com/manual/installation")
@@ -248,7 +248,7 @@ Files included:
 
     def authenticate(self) -> bool:
         """Authenticate with GitHub using device flow."""
-        print("\n🔐 Authenticating with GitHub...")
+        print("\\n🔐 Authenticating with GitHub...")
         print("This will open a browser window for device authentication.")
 
         try:
@@ -287,7 +287,7 @@ Files included:
         self, tag: str, title: str, notes: str, prerelease: bool = False
     ) -> bool:
         """Create a new GitHub release."""
-        print(f"\n🚀 Creating release {tag}...")
+        print(f"\\n🚀 Creating release {tag}...")
 
         try:
             cmd = [
@@ -316,7 +316,7 @@ Files included:
 
     def upload_assets(self, tag: str, version_zips: List[Path]) -> bool:
         """Upload version ZIP files to the release."""
-        print(f"\n📤 Uploading assets to release {tag}...")
+        print(f"\\n📤 Uploading assets to release {tag}...")
 
         if not version_zips:
             print("❌ No ZIP files to upload!")
@@ -361,11 +361,11 @@ Files included:
         zip_info = ""
         for zip_path in version_zips:
             size_mb = zip_path.stat().st_size / (1024 * 1024)
-            zip_info += f"- **`{zip_path.name}`** - Pre-built indexes for IFS Cloud {zip_path.stem} ({size_mb:.1f} MB)\n"
+            zip_info += f"- **`{zip_path.name}`** - Pre-built indexes for IFS Cloud {zip_path.stem} ({size_mb:.1f} MB)\\n"
 
         versions_list = ""
         for ver in available_versions:
-            versions_list += f"- **{ver}** - Ready for immediate use\n"
+            versions_list += f"- **{ver}** - Ready for immediate use\\n"
 
         return f"""# IFS Cloud MCP Server - Release {tag}
 
@@ -451,15 +451,15 @@ python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version VERSION
 
     def interactive_release_flow(self) -> bool:
         """Interactive flow for creating and uploading release."""
-        print("\n" + "=" * 60)
+        print("\\n" + "=" * 60)
         print("🚀 IFS CLOUD MCP SERVER RELEASE WIZARD")
         print("=" * 60)
 
         # Find available versions
         available_versions = self.find_available_versions()
         if not available_versions:
-            print("\n❌ No versions with safe files found!")
-            print("\nTo create safe files for a version:")
+            print("\\n❌ No versions with safe files found!")
+            print("\\nTo create safe files for a version:")
             print(
                 "1. Import ZIP: python -m src.ifs_cloud_mcp_server.main import /path/to/version.zip"
             )
@@ -479,21 +479,21 @@ python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version VERSION
         latest_version = self.get_latest_release_version()
 
         if existing_releases:
-            print("\n📋 Existing releases:")
+            print("\\n📋 Existing releases:")
             for release in existing_releases[:5]:  # Show last 5
                 prerelease_mark = " (prerelease)" if release.get("isPrerelease") else ""
                 print(f"   • {release['tagName']}{prerelease_mark}")
 
         if latest_version:
-            print(f"\n📌 Latest release: v{latest_version}")
+            print(f"\\n📌 Latest release: v{latest_version}")
 
         # Show available versions
-        print(f"\n📁 Available versions with safe files:")
+        print(f"\\n📁 Available versions with safe files:")
         for i, version in enumerate(available_versions, 1):
             print(f"   {i}. {version}")
 
         # Get release tag from user
-        print(f"\n🏷️ Release Tag:")
+        print(f"\\n🏷️ Release Tag:")
         tag_input = input("   Enter release tag (e.g., v1.0.0): ").strip()
         if not tag_input:
             print("❌ Release tag is required!")
@@ -504,12 +504,12 @@ python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version VERSION
             return False
 
         # Create ZIP files for each version
-        print(f"\n📦 Creating ZIP archives for all versions...")
+        print(f"\\n📦 Creating ZIP archives for all versions...")
         version_zips = []
         total_archive_size = 0
 
         for version_name in available_versions:
-            print(f"\n🔄 Processing version {version_name}...")
+            print(f"\\n🔄 Processing version {version_name}...")
 
             # Get safe files for this version
             safe_files = self._get_safe_files(version_name)
@@ -534,11 +534,11 @@ python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version VERSION
             return False
 
         print(
-            f"\n📊 Summary: {len(version_zips)} ZIP files created, total size: {total_archive_size / (1024*1024):.1f} MB"
+            f"\\n📊 Summary: {len(version_zips)} ZIP files created, total size: {total_archive_size / (1024*1024):.1f} MB"
         )
 
         # Get release details
-        print(f"\n📝 Release Details:")
+        print(f"\\n📝 Release Details:")
         title = input(
             f"   Enter release title (default: 'IFS Cloud MCP Server {tag_input} - Multi-Version Indexes'): "
         ).strip()
@@ -549,14 +549,14 @@ python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version VERSION
 
         # Generate release notes
         notes = self.generate_release_notes(tag_input, available_versions, version_zips)
-        print(f"\n📄 Generated release notes preview:")
+        print(f"\\n📄 Generated release notes preview:")
         print("-" * 40)
         print(notes[:800] + "..." if len(notes) > 800 else notes)
         print("-" * 40)
 
         confirm = (
             input(
-                f"\nProceed with release creation and upload for {tag_input}? (Y/n): "
+                f"\\nProceed with release creation and upload for {tag_input}? (Y/n): "
             )
             .strip()
             .lower()
@@ -575,12 +575,12 @@ python -m src.ifs_cloud_mcp_server.main calculate-pagerank --version VERSION
             return False
 
         print(
-            f"\n🎉 SUCCESS! Release {tag_input} created and {len(version_zips)} ZIP files uploaded!"
+            f"\\n🎉 SUCCESS! Release {tag_input} created and {len(version_zips)} ZIP files uploaded!"
         )
         print(
             f"🔗 View release: https://github.com/{self.repo}/releases/tag/{tag_input}"
         )
-        print(f"\n📊 Release Summary:")
+        print(f"\\n📊 Release Summary:")
         print(f"   • Tag: {tag_input}")
         print(f"   • Versions included: {', '.join(available_versions)}")
         print(f"   • Total archive size: {total_archive_size / (1024*1024):.1f} MB")
@@ -620,20 +620,20 @@ def main():
         success = uploader.run()
 
         if success:
-            print("\n✅ Upload completed successfully!")
-            print("\n📋 Next steps:")
+            print("\\n✅ Upload completed successfully!")
+            print("\\n📋 Next steps:")
             print("1. Test MCP server with published indexes")
             print("2. Update documentation with new release")
             print("3. Notify users about available pre-built indexes")
         else:
-            print("\n❌ Upload failed or was cancelled")
+            print("\\n❌ Upload failed or was cancelled")
             sys.exit(1)
 
     except KeyboardInterrupt:
-        print("\n\n❌ Upload cancelled by user (Ctrl+C)")
+        print("\\n\\n❌ Upload cancelled by user (Ctrl+C)")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
+        print(f"\\n❌ Unexpected error: {e}")
         sys.exit(1)
 
 

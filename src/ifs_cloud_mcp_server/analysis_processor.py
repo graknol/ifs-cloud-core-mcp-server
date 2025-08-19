@@ -67,37 +67,24 @@ class BuiltInPageRankAnalyzer:
         self.max_context_tokens = max_context_tokens
 
     def _fix_api_naming(self, api_name: str) -> str:
-        """Fix API naming by adding underscores before capital letters (except first and PI in API)."""
+        """Fix API naming by adding underscores between Pascal case units while keeping Pascal case."""
         if not api_name:
             return api_name
 
-        # If API name is already in correct uppercase format with underscores, return as-is
-        if api_name.isupper() and "_" in api_name:
-            return api_name
+        # Remove file extension if present
+        if api_name.endswith(".plsql"):
+            api_name = api_name[:-6]
 
-        # Handle API suffix properly - check for both _API and API endings
-        if api_name.endswith("_API"):
-            base_name = api_name[:-4]  # Remove _API
-            suffix = "_API"
-        elif api_name.endswith("API"):
-            base_name = api_name[:-3]  # Remove API
-            suffix = "_API"
-        else:
-            base_name = api_name
-            suffix = ""
-
-        # Add underscores before capital letters, except:
-        # - First character
-        # - Letters that are part of "PI" in "_API" (if at the end)
+        # Add underscores before capital letters, except the first character
         fixed_name = ""
-        for i, char in enumerate(base_name):
+        for i, char in enumerate(api_name):
             if i > 0 and char.isupper():
                 # Don't add underscore if the previous char already is one
                 if fixed_name[-1] != "_":
                     fixed_name += "_"
             fixed_name += char
 
-        return fixed_name.upper() + suffix
+        return fixed_name + "_API"
 
     def _extract_changelog_lines(self, content: str) -> List[str]:
         """Extract 10 changelog messages from header: first, last, and 8 evenly spaced between."""
@@ -453,12 +440,12 @@ class BuiltInPageRankAnalyzer:
             # Determine this file's API name from file path
             file_name = file_path.name
             if file_name.endswith(".plsql"):
-                api_name = file_name[:-6].upper() + "_API"  # Remove .plsql extension
+                base_name = file_name[:-6]  # Remove .plsql extension
             else:
-                api_name = file_path.stem.upper() + "_API"
+                base_name = file_path.stem
 
-            # Apply API naming fixes
-            api_name = self._fix_api_naming(api_name)
+            # Apply API naming fixes to get Pascal case with underscores
+            api_name = self._fix_api_naming(base_name)
 
             # Extract changelog and procedure/function names
             changelog_lines = self._extract_changelog_lines(content)
@@ -512,13 +499,71 @@ class BuiltInPageRankAnalyzer:
 
         return reference_graph
 
+    def extract_metadata_only(self) -> Dict[str, Any]:
+        """Extract file metadata and API calls without PageRank calculation."""
+        logger.info("🔍 Starting file metadata extraction...")
+
+        # Use pre-set file list if available, otherwise find all PL/SQL files
+        if hasattr(self, "plsql_files") and self.plsql_files:
+            plsql_files = self.plsql_files
+            logger.info(f"Using pre-set file list: {len(plsql_files)} files")
+        else:
+            plsql_files = list(self.work_dir.rglob("*.plsql"))
+            logger.info(f"Found {len(plsql_files)} PL/SQL files")
+
+        if not plsql_files:
+            raise ValueError(f"No PL/SQL files found in {self.work_dir}")
+
+        # Extract file information
+        logger.info("📊 Extracting file metadata...")
+        files_info = []
+        for i, file_path in enumerate(plsql_files):
+            if i % 10 == 0:
+                logger.info(f"Processed {i}/{len(plsql_files)} files")
+
+            info = self.extract_file_info(file_path)
+            if info:
+                files_info.append(info)
+
+        logger.info(f"Successfully processed {len(files_info)} files")
+
+        # Build reference graph (needed for dependency analysis)
+        logger.info("🔗 Building reference graph...")
+        reference_graph = self.build_reference_graph(files_info)
+
+        # Prepare final analysis (without PageRank scoring)
+        analysis_metadata = {
+            "work_directory": str(self.work_dir),
+            "max_context_tokens": self.max_context_tokens,
+            "analysis_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "processing_stats": {
+                "total_files_found": len(plsql_files),
+                "total_files_processed": len(files_info),
+                "total_api_calls_found": sum(
+                    len(info["api_calls"]) for info in files_info
+                ),
+            },
+        }
+
+        return {
+            "analysis_metadata": analysis_metadata,
+            "file_info": files_info,
+            "reference_graph": {
+                k: list(v) for k, v in reference_graph.items()
+            },  # Convert sets to lists for JSON serialization
+        }
+
     def analyze_files(self) -> Dict[str, Any]:
         """Perform complete PageRank analysis of PL/SQL files."""
         logger.info("🔍 Starting built-in PageRank analysis...")
 
-        # Find all PL/SQL files
-        plsql_files = list(self.work_dir.rglob("*.plsql"))
-        logger.info(f"Found {len(plsql_files)} PL/SQL files")
+        # Use pre-set file list if available, otherwise find all PL/SQL files
+        if hasattr(self, "plsql_files") and self.plsql_files:
+            plsql_files = self.plsql_files
+            logger.info(f"Using pre-set file list: {len(plsql_files)} files")
+        else:
+            plsql_files = list(self.work_dir.rglob("*.plsql"))
+            logger.info(f"Found {len(plsql_files)} PL/SQL files")
 
         if not plsql_files:
             raise ValueError(f"No PL/SQL files found in {self.work_dir}")
@@ -2393,11 +2438,13 @@ class ProductionEmbeddingFramework:
         checkpoint_dir: Path,
         model: str = "phi4-mini:3.8b-q4_K_M",
         max_files: Optional[int] = None,
+        force: bool = False,
     ):
         self.work_dir = Path(work_dir)
         self.analysis_file = Path(analysis_file)
         self.checkpoint_dir = Path(checkpoint_dir)
         self.max_files = max_files
+        self.force = force
 
         # Initialize components
         self.checkpoint_manager = EmbeddingCheckpointManager(self.checkpoint_dir)
@@ -2839,10 +2886,15 @@ class ProductionEmbeddingFramework:
 
     def _load_or_generate_analysis_data(self) -> List[FileMetadata]:
         """Load existing analysis or generate simplified analysis if missing."""
-        # Try to load existing analysis first
-        if self.analysis_file.exists():
+        # Skip loading existing analysis if force flag is set
+        if not self.force and self.analysis_file.exists():
             logger.info(f"📊 Loading existing analysis from {self.analysis_file}")
             return self._load_analysis_data()
+
+        if self.force and self.analysis_file.exists():
+            logger.info(
+                f"🔄 Force flag enabled, skipping existing analysis and regenerating..."
+            )
 
         # For testing/development: Create a simplified file list without full PageRank analysis
         if self.max_files and self.max_files <= 100:
@@ -2997,6 +3049,52 @@ class ProductionEmbeddingFramework:
             total_processing_time=elapsed,
             checkpoint_saved=False,
         )
+
+    def extract_metadata_only(self) -> Dict[str, Any]:
+        """Extract file metadata and API calls without PageRank calculation."""
+        logger.info("🔍 Starting metadata extraction...")
+
+        # Find all PL/SQL files
+        plsql_files = list(self.work_dir.rglob("*.plsql"))
+        logger.info(f"Found {len(plsql_files)} PL/SQL files")
+
+        if not plsql_files:
+            raise ValueError(f"No PL/SQL files found in {self.work_dir}")
+
+        # Apply max_files limit early if specified
+        if self.max_files:
+            original_count = len(plsql_files)
+            plsql_files = plsql_files[: self.max_files]
+            logger.info(
+                f"🔢 Limited analysis to {len(plsql_files)} files (from {original_count} total)"
+            )
+
+        # Update the analyzer with the limited file list and call extract_metadata_only
+        self.analyzer.plsql_files = plsql_files
+        return self.analyzer.extract_metadata_only()
+
+    def analyze_files(self) -> Dict[str, Any]:
+        """Perform complete PageRank analysis of PL/SQL files with max_files support."""
+        logger.info("🔍 Starting file analysis...")
+
+        # Find all PL/SQL files
+        plsql_files = list(self.work_dir.rglob("*.plsql"))
+        logger.info(f"Found {len(plsql_files)} PL/SQL files")
+
+        if not plsql_files:
+            raise ValueError(f"No PL/SQL files found in {self.work_dir}")
+
+        # Apply max_files limit early if specified
+        if self.max_files:
+            original_count = len(plsql_files)
+            plsql_files = plsql_files[: self.max_files]
+            logger.info(
+                f"🔢 Limited analysis to {len(plsql_files)} files (from {original_count} total)"
+            )
+
+        # Update the analyzer with the limited file list and call analyze_files
+        self.analyzer.plsql_files = plsql_files
+        return self.analyzer.analyze_files()
 
     def _print_progress(self, progress: ProcessingProgress) -> None:
         """Print formatted progress information."""

@@ -350,7 +350,7 @@ def handle_bm25s_reindex_command(args) -> int:
     """Handle the BM25S reindex command."""
     try:
         from pathlib import Path
-        from .embedding_processor import ProductionEmbeddingFramework
+        from .analysis_processor import ProductionEmbeddingFramework
         import json
 
         # Determine work directory and file paths using version
@@ -440,7 +440,7 @@ def handle_bm25s_reindex_command(args) -> int:
                     full_content = f.read()
 
                 # Create a minimal ProcessingResult for BM25S indexing
-                from .embedding_processor import ProcessingResult, FileMetadata
+                from .analysis_processor import ProcessingResult, FileMetadata
 
                 file_metadata = FileMetadata(
                     rank=file_info["rank"],
@@ -717,7 +717,7 @@ def handle_analyze_command(args) -> int:
         from datetime import datetime
 
         # Import the ProductionEmbeddingFramework class
-        from .embedding_processor import ProductionEmbeddingFramework
+        from .analysis_processor import ProductionEmbeddingFramework
 
         logging.info("🔍 Starting comprehensive file analysis...")
 
@@ -756,25 +756,16 @@ def handle_analyze_command(args) -> int:
             analysis_file=output_file,  # This won't be used for loading
             checkpoint_dir=base_dir
             / "embedding_checkpoints",  # Use version-specific directory
+            max_files=args.max_files,  # Pass max_files to framework
+            force=args.force,  # Pass force flag to framework
         )
 
-        # Apply max files limit if specified
+        # Run the metadata extraction only (no PageRank calculation)
+        logging.info("📊 Extracting file metadata and building dependency graph...")
         if args.max_files:
             logging.info(f"🔢 Limiting analysis to {args.max_files} files")
 
-        # Run the analysis
-        logging.info("📊 Analyzing files and building dependency graph...")
-        analysis_results = framework.analyze_files()
-
-        # Apply max files limit after analysis if specified
-        if args.max_files and analysis_results.get("file_rankings"):
-            original_count = len(analysis_results["file_rankings"])
-            analysis_results["file_rankings"] = analysis_results["file_rankings"][
-                : args.max_files
-            ]
-            logging.info(
-                f"🔢 Reduced results from {original_count} to {len(analysis_results['file_rankings'])} files"
-            )
+        analysis_results = framework.extract_metadata_only()
 
         # Save the analysis results
         logging.info(f"💾 Saving analysis results to {output_file}")
@@ -786,7 +777,8 @@ def handle_analyze_command(args) -> int:
             json.dump(analysis_results, f, indent=2)
 
         # Print summary
-        file_count = len(analysis_results.get("file_rankings", []))
+        files_info = analysis_results.get("file_info", [])
+        file_count = len(files_info)
         metadata = analysis_results.get("analysis_metadata", {})
         stats = metadata.get("processing_stats", {})
 
@@ -795,15 +787,17 @@ def handle_analyze_command(args) -> int:
         logging.info(f"   • API calls found: {stats.get('total_api_calls_found', 0)}")
         logging.info(f"   • Output saved to: {output_file}")
 
-        # Show top 10 files by reference count
-        file_rankings = analysis_results.get("file_rankings", [])
-        if file_rankings:
-            logging.info("🏆 Top 10 most referenced files:")
-            for i, file_info in enumerate(file_rankings[:10], 1):
+        # Show top 10 files by API call count (since we don't have PageRank yet)
+        if files_info:
+            # Sort by number of API calls
+            files_info_sorted = sorted(
+                files_info, key=lambda x: len(x.get("api_calls", [])), reverse=True
+            )
+            logging.info("🏆 Top 10 files by API call count:")
+            for i, file_info in enumerate(files_info_sorted[:10], 1):
                 name = file_info.get("file_name", "Unknown")
-                refs = file_info.get("reference_count", 0)
-                rank = file_info.get("rank", i)
-                logging.info(f"   {i:2d}. {name} (rank: {rank}, refs: {refs})")
+                api_count = len(file_info.get("api_calls", []))
+                logging.info(f"   {i:2d}. {name} ({api_count} API calls)")
 
         return 0
 
@@ -863,6 +857,11 @@ def main_sync():
         "--max-files",
         type=int,
         help="Maximum number of files to analyze (for testing)",
+    )
+    analyze_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force regeneration by skipping existing analysis file and overwriting it",
     )
     analyze_parser.add_argument(
         "--log-level",
@@ -984,7 +983,7 @@ def main_sync():
     elif getattr(args, "command", None) == "embed":
         # Embedding command requires async - lazy import to avoid CLI slowdown
         import asyncio
-        from .embedding_processor import run_embedding_command
+        from .analysis_processor import run_embedding_command
 
         setup_logging(args.log_level)
         return asyncio.run(run_embedding_command(args))

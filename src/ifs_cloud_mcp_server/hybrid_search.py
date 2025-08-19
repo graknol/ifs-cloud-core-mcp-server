@@ -26,7 +26,7 @@ from enum import Enum
 # import numpy as np  # Moved to lazy loading
 from flashrank import Ranker, RerankRequest
 
-from .embedding_processor import (
+from .analysis_processor import (
     BM25SIndexer,
     FAISSIndexManager,
     BGEM3EmbeddingGenerator,
