@@ -49,6 +49,9 @@ dependencies = [
     "ollama>=0.5.3",
     "nvidia-ml-py>=12.575.51",
     "aiohttp>=3.12.15",
+    "tiktoken>=0.11.0",
+    "nltk>=3.9.1",
+    "platformdirs>=4.3.8",
 ]
 
 [project.optional-dependencies]

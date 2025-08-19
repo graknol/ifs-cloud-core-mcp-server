@@ -13,7 +13,7 @@ from collections import defaultdict, Counter
 
 import tantivy
 import aiofiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .parsers import IFSFileParser
 
@@ -59,8 +59,7 @@ class SearchResult(BaseModel):
     navigators: List[str] = []
     contexts: List[str] = []
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
+    model_config = ConfigDict()
 
 
 class IFSCloudIndexer:

@@ -18,11 +18,11 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .indexer import IFSCloudIndexer, SearchResult
 from .search_engine import IFSCloudSearchEngine
-from .demo_search_integration import get_demo_search, initialize_demo_search
+from .embedding_processor import ProductionEmbeddingFramework
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,7 @@ class WebUISearchResult(BaseModel):
     highlight: str = ""
     tags: List[str] = []
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
+    model_config = ConfigDict()
 
 
 class FileContentResponse(BaseModel):
@@ -121,6 +120,62 @@ class IFSCloudWebUI:
     def __init__(self, index_path: str = "./index"):
         self.indexer = IFSCloudIndexer(index_path)
         self.search_engine = IFSCloudSearchEngine(self.indexer)
+
+        # Initialize embedding processor for hybrid search
+        try:
+            # Import get_data_directory function
+            from .main import get_data_directory
+
+            # Use proper data directory instead of current directory
+            data_dir = get_data_directory()
+            # For web UI, we could default to the first available version or require version selection
+            # For now, let's look for any available version
+            extracts_dir = data_dir / "extracts"
+
+            work_dir = None
+            analysis_file = None
+            checkpoint_dir = None
+
+            if extracts_dir.exists():
+                # Find the first available version
+                version_dirs = [d for d in extracts_dir.iterdir() if d.is_dir()]
+                if version_dirs:
+                    # Use the first available version
+                    version_dir = version_dirs[0]
+                    work_dir = version_dir / "_work"
+                    analysis_file = version_dir / "comprehensive_plsql_analysis.json"
+                    checkpoint_dir = version_dir / "embedding_checkpoints"
+
+            # Only initialize if analysis file and checkpoint directory exist
+            if (
+                work_dir
+                and analysis_file
+                and analysis_file.exists()
+                and checkpoint_dir
+                and checkpoint_dir.exists()
+            ):
+                self.embedding_processor = ProductionEmbeddingFramework(
+                    work_dir=work_dir,
+                    analysis_file=analysis_file,
+                    checkpoint_dir=checkpoint_dir,
+                    model="phi4-mini:3.8b-q4_K_M",
+                )
+
+                # Add embedding processor to search engine for demo endpoints
+                self.search_engine.embedding_processor = self.embedding_processor
+                logger.info("✅ Embedding processor initialized successfully")
+            else:
+                self.embedding_processor = None
+                self.search_engine.embedding_processor = None
+                logger.info(
+                    "⚠️ Embedding processor not initialized - missing required files or directories"
+                )
+
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize embedding processor: {e}")
+            self.embedding_processor = None
+            self.search_engine.embedding_processor = None
+
         self.app = FastAPI(
             title="IFS Cloud Explorer",
             description="Web UI for exploring IFS Cloud codebases with intelligent search",
@@ -134,17 +189,20 @@ class IFSCloudWebUI:
 
     def _setup_static_files(self):
         """Setup static files and templates."""
-        # Create static and templates directories if they don't exist
-        static_dir = Path("static")
-        templates_dir = Path("templates")
+        # Use package directory for static files and templates
+        package_dir = Path(__file__).parent
+        static_dir = package_dir / "static"
+        templates_dir = package_dir / "templates"
+
+        # Create directories if they don't exist
         static_dir.mkdir(exist_ok=True)
         templates_dir.mkdir(exist_ok=True)
 
         # Mount static files
-        self.app.mount("/static", StaticFiles(directory="static"), name="static")
+        self.app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
         # Setup templates
-        self.templates = Jinja2Templates(directory="templates")
+        self.templates = Jinja2Templates(directory=str(templates_dir))
 
     def _setup_routes(self):
         """Setup FastAPI routes."""
@@ -164,15 +222,59 @@ class IFSCloudWebUI:
             )
 
         # ==================================================
-        # DEMO SEARCH ENDPOINTS (UniXcoder + FAISS)
+        # HYBRID SEARCH DEMO ENDPOINTS (BM25S + FAISS)
         # ==================================================
 
         @self.app.get("/api/demo/status")
         async def demo_status():
-            """Get status of the UniXcoder demo search engine."""
+            """Get status of the hybrid search engine."""
             try:
-                demo_search = get_demo_search()
-                status = demo_search.get_status()
+                # Check if embedding processor is available
+                embedding_processor_available = (
+                    hasattr(self.search_engine, "embedding_processor")
+                    and self.search_engine.embedding_processor is not None
+                )
+
+                # Check BM25S index availability
+                bm25s_available = False
+                if embedding_processor_available:
+                    bm25s_indexer = getattr(
+                        self.search_engine.embedding_processor, "bm25_indexer", None
+                    )
+                    if bm25s_indexer:
+                        bm25s_available = (
+                            hasattr(bm25s_indexer, "bm25_index")
+                            and bm25s_indexer.bm25_index is not None
+                            and hasattr(bm25s_indexer, "doc_mapping")
+                            and len(bm25s_indexer.doc_mapping) > 0
+                        )
+
+                # Check FAISS index availability
+                faiss_available = False
+                if embedding_processor_available:
+                    faiss_manager = getattr(
+                        self.search_engine.embedding_processor, "faiss_manager", None
+                    )
+                    if faiss_manager:
+                        faiss_available = (
+                            hasattr(faiss_manager, "faiss_index")
+                            and faiss_manager.faiss_index is not None
+                            and hasattr(faiss_manager, "embeddings")
+                            and len(faiss_manager.embeddings) > 0
+                        )
+
+                status = {
+                    "status": (
+                        "ready" if (faiss_available and bm25s_available) else "partial"
+                    ),
+                    "available": True,
+                    "components": {
+                        "bm25s": bm25s_available,
+                        "faiss": faiss_available,
+                        "embedding_processor": embedding_processor_available,
+                    },
+                    "description": "Advanced hybrid search with BM25S lexical + FAISS semantic search",
+                }
                 return JSONResponse(status)
             except Exception as e:
                 logger.error(f"Error getting demo status: {e}")
@@ -184,16 +286,60 @@ class IFSCloudWebUI:
         async def demo_search_get(
             query: str = Query(..., description="Search query"),
             limit: int = Query(10, description="Maximum results"),
+            search_type: str = Query(
+                "hybrid", description="Search type: hybrid, bm25s, faiss"
+            ),
             module: Optional[str] = Query(None, description="Filter by module"),
-            min_score: float = Query(0.2, description="Minimum similarity score"),
+            min_score: float = Query(0.1, description="Minimum similarity score"),
         ):
-            """UniXcoder semantic search endpoint (GET)."""
+            """Hybrid search demo endpoint (GET) - showcases BM25S + FAISS fusion."""
             try:
-                demo_search = get_demo_search()
-                results = await demo_search.search(
-                    query=query, limit=limit, module_filter=module, min_score=min_score
-                )
-                return JSONResponse(results)
+                logger.info(f"Demo search: {search_type} search for '{query}'")
+
+                # Perform search using the configured search engine
+                if search_type == "bm25s":
+                    # BM25S lexical search only
+                    results = await self._demo_bm25s_search(
+                        query, limit, module, min_score
+                    )
+                elif search_type == "faiss":
+                    # FAISS semantic search only
+                    results = await self._demo_faiss_search(
+                        query, limit, module, min_score
+                    )
+                else:
+                    # Hybrid search (default)
+                    results = self.search_engine.search(
+                        query=query, limit=limit, module=module, include_related=True
+                    )
+
+                # Format results for demo
+                demo_results = {
+                    "query": query,
+                    "search_type": search_type,
+                    "total_results": len(results),
+                    "results": [
+                        {
+                            "path": result.path,
+                            "name": result.name,
+                            "type": result.type,
+                            "score": result.score,
+                            "preview": (
+                                result.content_preview[:200] + "..."
+                                if len(result.content_preview) > 200
+                                else result.content_preview
+                            ),
+                            "module": result.module,
+                            "logical_unit": result.logical_unit,
+                            "entity_name": result.entity_name,
+                            "complexity_score": result.complexity_score,
+                            "pagerank_score": result.pagerank_score,
+                        }
+                        for result in results
+                    ],
+                }
+
+                return JSONResponse(demo_results)
             except HTTPException:
                 raise
             except Exception as e:
@@ -202,32 +348,225 @@ class IFSCloudWebUI:
 
         @self.app.post("/api/demo/search")
         async def demo_search_post(request: SearchRequest):
-            """UniXcoder semantic search endpoint (POST)."""
+            """Hybrid search demo endpoint (POST)."""
             try:
-                demo_search = get_demo_search()
-                results = await demo_search.search(
+                # Use the search engine for demonstration
+                results = self.search_engine.search(
                     query=request.query,
                     limit=request.limit,
-                    module_filter=request.module,
-                    min_score=0.2,  # Default minimum score
+                    file_type=request.file_type,
+                    module=request.module,
+                    include_related=True,
                 )
-                return JSONResponse(results)
+
+                demo_results = {
+                    "query": request.query,
+                    "search_type": "hybrid",
+                    "total_results": len(results),
+                    "results": [
+                        {
+                            "path": result.path,
+                            "name": result.name,
+                            "type": result.type,
+                            "score": result.score,
+                            "preview": (
+                                result.content_preview[:300] + "..."
+                                if len(result.content_preview) > 300
+                                else result.content_preview
+                            ),
+                            "module": result.module,
+                            "logical_unit": result.logical_unit,
+                            "functions": result.functions,
+                            "entities": result.entities,
+                        }
+                        for result in results
+                    ],
+                }
+
+                return JSONResponse(demo_results)
             except HTTPException:
                 raise
             except Exception as e:
                 logger.error(f"Demo search POST error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.get("/api/demo/modules")
-        async def demo_modules():
-            """Get available modules in the demo search."""
+        @self.app.get("/api/demo/compare")
+        async def demo_compare_search_types(
+            query: str = Query(..., description="Search query"),
+            limit: int = Query(5, description="Results per search type"),
+        ):
+            """Compare different search types side by side."""
             try:
-                demo_search = get_demo_search()
-                modules = demo_search.get_available_modules()
-                return JSONResponse({"modules": modules, "total": len(modules)})
+                comparison = {
+                    "query": query,
+                    "timestamp": datetime.now().isoformat(),
+                    "search_types": {},
+                }
+
+                # Try BM25S search
+                try:
+                    bm25s_results = await self._demo_bm25s_search(query, limit)
+                    comparison["search_types"]["bm25s"] = {
+                        "name": "BM25S Lexical Search",
+                        "description": "Traditional keyword matching with advanced preprocessing",
+                        "results": len(bm25s_results),
+                        "top_results": [
+                            {"path": r.path, "name": r.name, "score": r.score}
+                            for r in bm25s_results[:3]
+                        ],
+                    }
+                except Exception as e:
+                    comparison["search_types"]["bm25s"] = {
+                        "name": "BM25S Lexical Search",
+                        "error": str(e),
+                        "results": 0,
+                    }
+
+                # Try FAISS search
+                try:
+                    faiss_results = await self._demo_faiss_search(query, limit)
+                    comparison["search_types"]["faiss"] = {
+                        "name": "FAISS Semantic Search",
+                        "description": "Vector similarity search using embeddings",
+                        "results": len(faiss_results),
+                        "top_results": [
+                            {"path": r.path, "name": r.name, "score": r.score}
+                            for r in faiss_results[:3]
+                        ],
+                    }
+                except Exception as e:
+                    comparison["search_types"]["faiss"] = {
+                        "name": "FAISS Semantic Search",
+                        "error": str(e),
+                        "results": 0,
+                    }
+
+                # Try Hybrid search
+                try:
+                    hybrid_results = self.search_engine.search(
+                        query=query, limit=limit, include_related=True
+                    )
+                    comparison["search_types"]["hybrid"] = {
+                        "name": "Hybrid Search (BM25S + FAISS)",
+                        "description": "Fusion of lexical and semantic search with intelligent ranking",
+                        "results": len(hybrid_results),
+                        "top_results": [
+                            {"path": r.path, "name": r.name, "score": r.score}
+                            for r in hybrid_results[:3]
+                        ],
+                    }
+                except Exception as e:
+                    comparison["search_types"]["hybrid"] = {
+                        "name": "Hybrid Search",
+                        "error": str(e),
+                        "results": 0,
+                    }
+
+                return JSONResponse(comparison)
             except Exception as e:
-                logger.error(f"Error getting demo modules: {e}")
+                logger.error(f"Error in demo comparison: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        async def _demo_bm25s_search(
+            self,
+            query: str,
+            limit: int = 10,
+            module: Optional[str] = None,
+            min_score: float = 0.1,
+        ):
+            """Helper method for BM25S-only search demo."""
+            if (
+                not hasattr(self.search_engine, "embedding_processor")
+                or self.search_engine.embedding_processor is None
+            ):
+                return []
+
+            # Use BM25S indexer directly
+            bm25s_indexer = self.search_engine.embedding_processor.bm25s_indexer
+            if bm25s_indexer is None:
+                return []
+
+            # Perform BM25S search
+            bm25s_results = bm25s_indexer.search(query, top_k=limit)
+
+            # Convert to SearchResult format
+            results = []
+            for doc_id, score in bm25s_results:
+                if score < min_score:
+                    continue
+
+                # Get document info from mapping
+                doc_info = bm25s_indexer.get_document_info(doc_id)
+                if doc_info and (not module or doc_info.get("module") == module):
+                    # Create a basic SearchResult
+                    result = SearchResult(
+                        path=doc_info["path"],
+                        name=doc_info.get("name", doc_info["path"].split("/")[-1]),
+                        type=doc_info.get("type", "unknown"),
+                        content_preview=doc_info.get("content", "")[:500],
+                        score=score,
+                        entities=doc_info.get("entities", []),
+                        line_count=doc_info.get("lines", 0),
+                        complexity_score=doc_info.get("complexity_score", 0.0),
+                        pagerank_score=doc_info.get("pagerank_score", 0.0),
+                        modified_time=datetime.now(),
+                        hash=doc_info.get("hash", ""),
+                        module=doc_info.get("module"),
+                        logical_unit=doc_info.get("logical_unit"),
+                        entity_name=doc_info.get("entity_name"),
+                    )
+                    results.append(result)
+
+            return results
+
+        async def _demo_faiss_search(
+            self,
+            query: str,
+            limit: int = 10,
+            module: Optional[str] = None,
+            min_score: float = 0.1,
+        ):
+            """Helper method for FAISS-only search demo."""
+            if (
+                not hasattr(self.search_engine, "embedding_processor")
+                or self.search_engine.embedding_processor is None
+            ):
+                return []
+
+            # Use FAISS search directly
+            embedding_processor = self.search_engine.embedding_processor
+            if embedding_processor.faiss_index is None:
+                return []
+
+            # Perform semantic search
+            semantic_results = embedding_processor.search_semantic(query, top_k=limit)
+
+            # Convert to SearchResult format
+            results = []
+            for result in semantic_results:
+                if result.get("score", 0) < min_score:
+                    continue
+
+                if not module or result.get("module") == module:
+                    search_result = SearchResult(
+                        path=result["path"],
+                        name=result.get("name", result["path"].split("/")[-1]),
+                        type=result.get("type", "unknown"),
+                        content_preview=result.get("content", "")[:500],
+                        score=result.get("score", 0.0),
+                        entities=result.get("entities", []),
+                        line_count=result.get("lines", 0),
+                        complexity_score=result.get("complexity_score", 0.0),
+                        pagerank_score=result.get("pagerank_score", 0.0),
+                        modified_time=datetime.now(),
+                        hash=result.get("hash", ""),
+                        module=result.get("module"),
+                        logical_unit=result.get("logical_unit"),
+                        entity_name=result.get("entity_name"),
+                    )
+                    results.append(search_result)
+
+            return results
 
         @self.app.get("/api/search")
         async def search(
@@ -1079,12 +1418,17 @@ def find_available_port(start_port: int = 5700, max_port: int = 5799) -> int:
 # Main application entry point
 if __name__ == "__main__":
     """Main entry point for Web UI."""
+    from .main import get_data_directory
+
+    # Use proper data directory by default
+    default_index_path = get_data_directory() / "indexes" / "default"
+
     parser = argparse.ArgumentParser(description="IFS Cloud MCP Server Web UI")
     parser.add_argument(
         "--index-path",
         type=str,
-        default="./index",
-        help="Path to store the Tantivy index (default: ./index)",
+        default=str(default_index_path),
+        help=f"Path to store the Tantivy index (default: {default_index_path})",
     )
 
     args = parser.parse_args()
@@ -1118,18 +1462,21 @@ if __name__ == "__main__":
 
         # Initialize demo search in background after server starts
         print("🎯 UniXcoder demo search will initialize after server starts")
-        print("   Check /api/demo/status for initialization progress")
+        print("   Check /api/demo/status for hybrid search status")
 
-        # Add startup event for demo search initialization
+        # Add startup event for hybrid search engine validation
         @web_ui.app.on_event("startup")
         async def startup_event():
             try:
-                print("🔧 Starting UniXcoder demo search initialization...")
-                await initialize_demo_search()
-                print("✅ UniXcoder demo search ready!")
+                print("🔧 Validating hybrid search engine components...")
+                # The search engine initialization happens in __init__, just log status
+                if hasattr(web_ui.search_engine, "embedding_processor"):
+                    print("✅ Hybrid search engine components ready!")
+                else:
+                    print("⚠️ Warning: Some search components may not be available")
             except Exception as e:
-                print(f"⚠️ Demo search failed to initialize: {e}")
-                logger.error(f"Demo search initialization error: {e}")
+                print(f"⚠️ Search engine validation error: {e}")
+                logger.error(f"Search engine validation error: {e}")
 
         # Start the server
         uvicorn.run(web_ui.app, host="localhost", port=port, reload=False)
