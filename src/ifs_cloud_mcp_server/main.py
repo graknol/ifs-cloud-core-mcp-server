@@ -350,21 +350,15 @@ def handle_bm25s_reindex_command(args) -> int:
     """Handle the BM25S reindex command."""
     try:
         from pathlib import Path
-        from .analysis_processor import ProductionEmbeddingFramework
+        from .analysis_engine import AnalysisEngine
+        from .directory_utils import setup_analysis_engine_directories
         import json
 
-        # Determine work directory and file paths using version
-        work_dir = resolve_version_to_work_directory(args.version)
-        # Files go in the version's extract directory
-        data_dir = get_data_directory()
-        safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
-        base_dir = data_dir / "versions" / safe_version
-        analysis_dir = base_dir / "analysis"
-        analysis_dir.mkdir(parents=True, exist_ok=True)
-        analysis_file = (
-            analysis_dir / "comprehensive_plsql_analysis.json"
-        )  # Fixed filename
-        checkpoint_dir = base_dir / "embedding_checkpoints"
+        # Set up all required directories using centralized function
+        work_dir, checkpoint_dir, bm25s_dir, faiss_dir, analysis_file = (
+            setup_analysis_engine_directories(args.version)
+        )
+
         logging.info(f"Using IFS Cloud version: {args.version}")
         logging.info(f"Work directory: {work_dir}")
 
@@ -390,10 +384,12 @@ def handle_bm25s_reindex_command(args) -> int:
             logging.info(f"🔢 Max files limit: {args.max_files}")
 
         # Initialize the embedding framework (this will load existing indexes)
-        framework = ProductionEmbeddingFramework(
+        framework = AnalysisEngine(
             work_dir=work_dir,
             analysis_file=analysis_file,
             checkpoint_dir=checkpoint_dir,
+            bm25s_dir=bm25s_dir,
+            faiss_dir=faiss_dir,
             max_files=args.max_files,
         )
 
@@ -440,7 +436,7 @@ def handle_bm25s_reindex_command(args) -> int:
                     full_content = f.read()
 
                 # Create a minimal ProcessingResult for BM25S indexing
-                from .analysis_processor import ProcessingResult, FileMetadata
+                from .analysis_engine import ProcessingResult, FileMetadata
 
                 file_metadata = FileMetadata(
                     rank=file_info["rank"],
@@ -550,7 +546,7 @@ def handle_pagerank_command(args) -> int:
         with open(analysis_file, "r", encoding="utf-8") as f:
             analysis_data = json.load(f)
 
-        file_rankings = analysis_data.get("file_rankings", [])
+        file_rankings = analysis_data.get("file_info", [])
         logging.info(f"📋 Analyzing {len(file_rankings)} files for PageRank")
 
         # Build file index and dependency graph
@@ -561,88 +557,81 @@ def handle_pagerank_command(args) -> int:
             file_index[file_info["relative_path"]] = i
             files_list.append(file_info)
 
-        # Create adjacency matrix for PageRank
+        # Build dependency graph using simple Python data structures
         n_files = len(files_list)
-        adjacency_matrix = np.zeros((n_files, n_files))
 
-        logging.info("🔗 Building dependency graph...")
+        logging.info("🔗 Building dependency graph from analysis data...")
 
-        # Analyze file dependencies
+        # Get reference graph from analysis data
+        reference_graph = analysis_data.get("reference_graph", {})
         dependencies_found = 0
-        for i, file_info in enumerate(files_list):
-            file_path = work_dir / file_info["relative_path"]
 
-            if not file_path.exists():
-                logging.debug(f"⚠️ File not found: {file_path}")
-                continue
+        # Build incoming and outgoing link maps
+        incoming_links = defaultdict(list)  # file_idx -> list of files that link to it
+        outgoing_links = defaultdict(list)  # file_idx -> list of files it links to
 
-            try:
-                # Read file content to find dependencies
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read().upper()  # Convert to uppercase for matching
+        for source_file_path, referenced_files in reference_graph.items():
+            # Find the index of the source file
+            source_relative_path = str(Path(source_file_path).relative_to(work_dir))
+            if source_relative_path in file_index:
+                source_idx = file_index[source_relative_path]
 
-                # Extract API calls from file content
-                api_calls = file_info.get("api_calls", [])
+                # Add dependencies to referenced files
+                for target_file_path in referenced_files:
+                    target_relative_path = str(
+                        Path(target_file_path).relative_to(work_dir)
+                    )
+                    if target_relative_path in file_index:
+                        target_idx = file_index[target_relative_path]
 
-                # For each API call, find files that might provide that API
-                for api_call in api_calls:
-                    # Find files whose API name matches this call
-                    for j, target_file in enumerate(files_list):
-                        if i == j:  # Don't self-reference
-                            continue
+                        # source_idx depends on target_idx (source calls target's API)
+                        # In PageRank: PageRank flows FROM target_idx TO source_idx
+                        # So target_idx gives PageRank to source_idx
+                        # FIXED: Swap the relationship - target gets incoming from source
+                        incoming_links[target_idx].append(source_idx)
+                        outgoing_links[source_idx].append(target_idx)
+                        dependencies_found += 1
+                        logging.debug(
+                            f"Dependency: {files_list[source_idx]['file_name']} <- {files_list[target_idx]['file_name']}"
+                        )
 
-                        target_api = target_file.get("api_name", "").upper()
+        logging.info(f"🔗 Found {dependencies_found} dependencies from analysis data")
 
-                        # Check if this file provides the API being called
-                        if api_call.upper() == target_api:
-                            adjacency_matrix[i][j] = 1  # i depends on j
-                            dependencies_found += 1
-                            logging.debug(
-                                f"Dependency: {file_info['file_name']} -> {target_file['file_name']}"
-                            )
+        # Count nodes with no incoming/outgoing links
+        no_incoming = sum(1 for i in range(n_files) if len(incoming_links[i]) == 0)
+        no_outgoing = sum(1 for i in range(n_files) if len(outgoing_links[i]) == 0)
+        logging.info(f"🔗 Files with no incoming dependencies: {no_incoming}")
+        logging.info(f"🔗 Files with no outgoing dependencies: {no_outgoing}")
 
-                        # Also check if API call appears in the target file name or content
-                        elif api_call.upper() in target_file["file_name"].upper():
-                            adjacency_matrix[i][j] = 0.5  # Weaker dependency
-                            dependencies_found += 1
+        logging.info("🧮 Running simple PageRank algorithm...")
 
-            except Exception as e:
-                logging.warning(
-                    f"⚠️ Failed to analyze dependencies for {file_path}: {e}"
-                )
-                continue
-
-        logging.info(f"🔗 Found {dependencies_found} dependencies")
-
-        # Convert adjacency matrix to transition matrix for PageRank
-        # Transpose because PageRank flows from linked-to pages to linking pages
-        transition_matrix = adjacency_matrix.T
-
-        # Normalize rows (make it stochastic)
-        row_sums = transition_matrix.sum(axis=1)
-        for i in range(n_files):
-            if row_sums[i] > 0:
-                transition_matrix[i] /= row_sums[i]
-            else:
-                # If no outgoing links, distribute equally to all pages
-                transition_matrix[i] = 1.0 / n_files
-
-        logging.info("🧮 Running PageRank algorithm...")
-
-        # Initialize PageRank vector
-        pagerank_vector = np.ones(n_files) / n_files
+        # Initialize PageRank scores
+        pagerank_scores = [1.0 / n_files] * n_files
 
         # Run PageRank iterations
         for iteration in range(args.max_iterations):
-            prev_pagerank = pagerank_vector.copy()
+            new_scores = [0.0] * n_files
 
-            # PageRank formula: PR(i) = (1-d)/N + d * sum(PR(j)/L(j)) for all j linking to i
-            pagerank_vector = (
-                1 - args.damping_factor
-            ) / n_files + args.damping_factor * transition_matrix @ pagerank_vector
+            # Calculate PageRank for each file
+            for i in range(n_files):
+                # Base score from damping factor
+                new_scores[i] = (1 - args.damping_factor) / n_files
+
+                # Add contributions from files that link to this file
+                for linking_file_idx in incoming_links[i]:
+                    # Get the PageRank contribution from the linking file
+                    linking_file_outbound_count = len(outgoing_links[linking_file_idx])
+                    if linking_file_outbound_count > 0:
+                        contribution = (
+                            pagerank_scores[linking_file_idx]
+                            / linking_file_outbound_count
+                        )
+                        new_scores[i] += args.damping_factor * contribution
 
             # Check convergence
-            diff = np.abs(pagerank_vector - prev_pagerank).sum()
+            diff = sum(abs(new_scores[i] - pagerank_scores[i]) for i in range(n_files))
+            pagerank_scores = new_scores
+
             if diff < args.convergence_threshold:
                 logging.info(
                     f"✅ PageRank converged after {iteration + 1} iterations (diff: {diff:.2e})"
@@ -658,12 +647,10 @@ def handle_pagerank_command(args) -> int:
 
         # Create ranked results
         ranked_results = []
-        for i, (file_info, pagerank_score) in enumerate(
-            zip(files_list, pagerank_vector)
-        ):
+        for i, file_info in enumerate(files_list):
             ranked_result = {
                 **file_info,  # Copy all existing fields
-                "pagerank_score": float(pagerank_score),
+                "pagerank_score": float(pagerank_scores[i]),
                 "pagerank_rank": 0,  # Will be set after sorting
             }
             ranked_results.append(ranked_result)
@@ -716,22 +703,17 @@ def handle_analyze_command(args) -> int:
         import json
         from datetime import datetime
 
-        # Import the ProductionEmbeddingFramework class
-        from .analysis_processor import ProductionEmbeddingFramework
+        # Import the AnalysisEngine class
+        from .analysis_engine import AnalysisEngine
+        from .directory_utils import setup_analysis_engine_directories
 
         logging.info("🔍 Starting comprehensive file analysis...")
 
-        # Determine work directory and output paths using version
-        work_dir = resolve_version_to_work_directory(args.version)
-        # Output files go in the version's extract directory
-        data_dir = get_data_directory()
-        safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
-        base_dir = data_dir / "versions" / safe_version
-        analysis_dir = base_dir / "analysis"
-        analysis_dir.mkdir(parents=True, exist_ok=True)
-        output_file = (
-            analysis_dir / "comprehensive_plsql_analysis.json"
-        )  # Fixed filename
+        # Set up all required directories using centralized function
+        work_dir, checkpoint_dir, bm25s_dir, faiss_dir, analysis_file = (
+            setup_analysis_engine_directories(args.version)
+        )
+
         logging.info(f"Using IFS Cloud version: {args.version}")
         logging.info(f"Work directory: {work_dir}")
 
@@ -739,7 +721,7 @@ def handle_analyze_command(args) -> int:
             logging.error(f"❌ Work directory not found: {work_dir}")
             return 1
 
-        logging.info(f"📁 Output file: {output_file}")
+        logging.info(f"📁 Output file: {analysis_file}")
 
         # Find PL/SQL files
         plsql_files = list(work_dir.rglob("*.plsql"))
@@ -751,11 +733,12 @@ def handle_analyze_command(args) -> int:
 
         # Create a temporary framework instance just for analysis
         # We don't need all the embedding features, just the file analyzer
-        framework = ProductionEmbeddingFramework(
+        framework = AnalysisEngine(
             work_dir=work_dir,
-            analysis_file=output_file,  # This won't be used for loading
-            checkpoint_dir=base_dir
-            / "embedding_checkpoints",  # Use version-specific directory
+            analysis_file=analysis_file,  # This won't be used for loading
+            checkpoint_dir=checkpoint_dir,
+            bm25s_dir=bm25s_dir,
+            faiss_dir=faiss_dir,
             max_files=args.max_files,  # Pass max_files to framework
             force=args.force,  # Pass force flag to framework
         )
@@ -768,12 +751,12 @@ def handle_analyze_command(args) -> int:
         analysis_results = framework.extract_metadata_only()
 
         # Save the analysis results
-        logging.info(f"💾 Saving analysis results to {output_file}")
+        logging.info(f"💾 Saving analysis results to {analysis_file}")
 
         # Ensure output directory exists
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        analysis_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_file, "w", encoding="utf-8") as f:
+        with open(analysis_file, "w", encoding="utf-8") as f:
             json.dump(analysis_results, f, indent=2)
 
         # Print summary
@@ -785,7 +768,7 @@ def handle_analyze_command(args) -> int:
         logging.info("📊 Analysis Summary:")
         logging.info(f"   • Total files analyzed: {file_count}")
         logging.info(f"   • API calls found: {stats.get('total_api_calls_found', 0)}")
-        logging.info(f"   • Output saved to: {output_file}")
+        logging.info(f"   • Output saved to: {analysis_file}")
 
         # Show top 10 files by API call count (since we don't have PageRank yet)
         if files_info:
@@ -983,7 +966,7 @@ def main_sync():
     elif getattr(args, "command", None) == "embed":
         # Embedding command requires async - lazy import to avoid CLI slowdown
         import asyncio
-        from .analysis_processor import run_embedding_command
+        from .analysis_engine import run_embedding_command
 
         setup_logging(args.log_level)
         return asyncio.run(run_embedding_command(args))

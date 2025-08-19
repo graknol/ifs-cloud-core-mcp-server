@@ -140,6 +140,22 @@ def get_version_embedding_checkpoints_directory(version: str) -> Path:
     return checkpoint_dir
 
 
+def get_version_bm25s_directory(version: str) -> Path:
+    """Get the BM25S index directory for a specific version."""
+    base_dir = get_version_base_directory(version)
+    bm25s_dir = base_dir / "bm25s"
+    bm25s_dir.mkdir(parents=True, exist_ok=True)
+    return bm25s_dir
+
+
+def get_version_faiss_directory(version: str) -> Path:
+    """Get the FAISS index directory for a specific version."""
+    base_dir = get_version_base_directory(version)
+    faiss_dir = base_dir / "faiss"
+    faiss_dir.mkdir(parents=True, exist_ok=True)
+    return faiss_dir
+
+
 def setup_embedding_directories(version: str) -> Tuple[Path, Path, Path]:
     """
     Set up required directories for embedding processing for a specific version.
@@ -161,6 +177,33 @@ def setup_embedding_directories(version: str) -> Tuple[Path, Path, Path]:
         raise FileNotFoundError(f"Work directory not found: {work_dir}")
 
     return work_dir, checkpoint_dir, analysis_file
+
+
+def setup_analysis_engine_directories(
+    version: str,
+) -> Tuple[Path, Path, Path, Path, Path]:
+    """
+    Set up all required directories for AnalysisEngine for a specific version.
+
+    Args:
+        version: The version identifier
+
+    Returns:
+        Tuple of (source_dir, checkpoint_dir, bm25s_dir, faiss_dir, analysis_file)
+
+    Raises:
+        FileNotFoundError: If source directory not found
+    """
+    source_dir = get_version_source_directory(version)
+    checkpoint_dir = get_version_embedding_checkpoints_directory(version)
+    bm25s_dir = get_version_bm25s_directory(version)
+    faiss_dir = get_version_faiss_directory(version)
+    analysis_file = get_version_analysis_file(version)
+
+    if not source_dir.exists():
+        raise FileNotFoundError(f"Source directory not found: {source_dir}")
+
+    return source_dir, checkpoint_dir, bm25s_dir, faiss_dir, analysis_file
 
 
 def get_supported_extensions() -> Set[str]:

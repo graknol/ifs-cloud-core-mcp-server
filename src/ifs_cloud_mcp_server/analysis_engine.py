@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Any, Tuple
 import hashlib
 import pickle
+from tqdm import tqdm
 
 # Search engine imports - using lazy loading to avoid CLI slowdown
 try:
@@ -60,10 +61,18 @@ logger = logging.getLogger(__name__)
 
 
 class BuiltInPageRankAnalyzer:
-    """Built-in PageRank analyzer for PL/SQL files."""
+    """Built-in PageRank analyzer for PL/SQL files.
 
-    def __init__(self, work_dir: Path, max_context_tokens: int = 65536):
-        self.work_dir = Path(work_dir)
+    Args:
+        source_dir: Directory containing the source PL/SQL files to analyze
+        max_context_tokens: Maximum context tokens for processing
+    """
+
+    def __init__(self, source_dir: Path, max_context_tokens: int = 65536):
+        self.work_dir = Path(
+            source_dir
+        )  # Keep internal name as work_dir for compatibility
+        self.source_dir = self.work_dir  # Add alias for clarity
         self.max_context_tokens = max_context_tokens
 
     def _fix_api_naming(self, api_name: str) -> str:
@@ -517,13 +526,19 @@ class BuiltInPageRankAnalyzer:
         # Extract file information
         logger.info("📊 Extracting file metadata...")
         files_info = []
+        
+        # Minimal progress - just dots
+        total_files = len(plsql_files)
         for i, file_path in enumerate(plsql_files):
-            if i % 10 == 0:
-                logger.info(f"Processed {i}/{len(plsql_files)} files")
-
             info = self.extract_file_info(file_path)
             if info:
                 files_info.append(info)
+            
+            # Minimal progress - just show a dot every few files
+            if i % 10 == 0 or i == total_files - 1:
+                print(f"\r{i+1}/{total_files} files", end='', flush=True)
+        
+        print()  # Newline when done
 
         logger.info(f"Successfully processed {len(files_info)} files")
 
@@ -571,13 +586,19 @@ class BuiltInPageRankAnalyzer:
         # Extract file information
         logger.info("📊 Extracting file metadata...")
         files_info = []
+        
+        # Minimal progress - just dots
+        total_files = len(plsql_files)
         for i, file_path in enumerate(plsql_files):
-            if i % 10 == 0:
-                logger.info(f"Processed {i}/{len(plsql_files)} files")
-
             info = self.extract_file_info(file_path)
             if info:
                 files_info.append(info)
+            
+            # Minimal progress - just show a dot every few files
+            if i % 10 == 0 or i == total_files - 1:
+                print(f"\r{i+1}/{total_files} files", end='', flush=True)
+        
+        print()  # Newline when done
 
         logger.info(f"Successfully processed {len(files_info)} files")
 
@@ -638,7 +659,13 @@ class BuiltInPageRankAnalyzer:
             },
         }
 
-        return {"analysis_metadata": analysis_metadata, "file_rankings": file_rankings}
+        return {
+            "analysis_metadata": analysis_metadata, 
+            "file_rankings": file_rankings,
+            "reference_graph": {
+                k: list(v) for k, v in reference_graph.items()
+            },  # Convert sets to lists for JSON serialization
+        }
 
 
 @dataclass
@@ -764,11 +791,15 @@ class BGEM3EmbeddingGenerator:
 
 
 class FAISSIndexManager:
-    """Manages FAISS index creation and persistence for embeddings."""
+    """Manages FAISS index creation and persistence for embeddings.
 
-    def __init__(self, index_dir: Path, embedding_dim: int = 1024):
-        self.index_dir = index_dir
-        self.faiss_dir = self.index_dir / "faiss"
+    Args:
+        faiss_dir: Directory to store FAISS index files
+        embedding_dim: Dimension of embedding vectors (default: 1024 for BGE-M3)
+    """
+
+    def __init__(self, faiss_dir: Path, embedding_dim: int = 1024):
+        self.faiss_dir = Path(faiss_dir)
         self.faiss_dir.mkdir(parents=True, exist_ok=True)
 
         self.embedding_dim = embedding_dim
@@ -934,11 +965,14 @@ class FAISSIndexManager:
 
 
 class BM25SIndexer:
-    """Handles BM25S indexing for lexical search with advanced text preprocessing."""
+    """Handles BM25S indexing for lexical search with advanced text preprocessing.
 
-    def __init__(self, index_dir: Path):
-        self.index_dir = index_dir
-        self.bm25s_dir = self.index_dir / "bm25s"
+    Args:
+        bm25s_dir: Directory to store BM25S index files
+    """
+
+    def __init__(self, bm25s_dir: Path):
+        self.bm25s_dir = Path(bm25s_dir)
         self.bm25s_dir.mkdir(parents=True, exist_ok=True)
 
         # BM25S index files
@@ -1587,12 +1621,12 @@ class BM25SIndexer:
                 corpus_tokens.append(stemmed_tokens)
 
                 if (i + 1) % 1000 == 0:
-                    logger.info(f"Processed {i + 1}/{len(self.corpus_texts)} documents")
+                    logger.debug(f"Processed {i + 1}/{len(self.corpus_texts)} documents")
 
             # Build BM25S index with our preprocessed tokens
             logger.info("Building BM25S index...")
             self.bm25_index = bm25s.BM25()
-            self.bm25_index.index(corpus_tokens, show_progress=True)
+            self.bm25_index.index(corpus_tokens, show_progress=False)
 
             # Save index to disk
             with open(self.bm25_index_file, "wb") as f:
@@ -2428,14 +2462,27 @@ Focus on business value, system relationships, and searchable concepts rather th
             )
 
 
-class ProductionEmbeddingFramework:
-    """Production-ready embedding framework with all learnings incorporated."""
+class AnalysisEngine:
+    """Production-ready embedding framework with all learnings incorporated.
+
+    Args:
+        work_dir: Directory containing the source PL/SQL files
+        analysis_file: Path to the comprehensive analysis JSON file
+        checkpoint_dir: Directory for embedding processing checkpoints
+        bm25s_dir: Directory for BM25S index files (default: <version>/bm25s)
+        faiss_dir: Directory for FAISS index files (default: <version>/faiss)
+        model: Ollama model name for AI summaries
+        max_files: Maximum number of files to process (for testing)
+        force: Force regeneration by skipping existing analysis
+    """
 
     def __init__(
         self,
         work_dir: Path,
         analysis_file: Path,
         checkpoint_dir: Path,
+        bm25s_dir: Path,
+        faiss_dir: Path,
         model: str = "phi4-mini:3.8b-q4_K_M",
         max_files: Optional[int] = None,
         force: bool = False,
@@ -2446,17 +2493,17 @@ class ProductionEmbeddingFramework:
         self.max_files = max_files
         self.force = force
 
+        # Set directories from provided paths
+        self.bm25s_dir = Path(bm25s_dir)
+        self.faiss_dir = Path(faiss_dir)
+
         # Initialize components
         self.checkpoint_manager = EmbeddingCheckpointManager(self.checkpoint_dir)
         self.ollama_processor = OllamaProcessor(model)
-        # Put search indexes directly under the base version directory
-        search_index_dir = (
-            self.checkpoint_dir.parent
-        )  # Go up from embedding_checkpoints to version dir
-        self.bm25_indexer = BM25SIndexer(search_index_dir)
+        self.bm25_indexer = BM25SIndexer(self.bm25s_dir)
         self.embedding_generator = BGEM3EmbeddingGenerator()
         self.faiss_manager = FAISSIndexManager(
-            search_index_dir,
+            self.faiss_dir,
             embedding_dim=1024,  # BGE-M3 default dimension
         )
 
@@ -2886,15 +2933,16 @@ class ProductionEmbeddingFramework:
 
     def _load_or_generate_analysis_data(self) -> List[FileMetadata]:
         """Load existing analysis or generate simplified analysis if missing."""
-        # Skip loading existing analysis if force flag is set
-        if not self.force and self.analysis_file.exists():
-            logger.info(f"📊 Loading existing analysis from {self.analysis_file}")
+        
+        # If force flag is set, skip all existing analysis and return empty rankings
+        if self.force:
+            logger.info("� Force flag enabled, skipping existing analysis completely...")
+            return []
+        
+        # Load existing analysis if available and force is not set
+        if self.analysis_file.exists():
+            logger.info(f"� Loading existing analysis from {self.analysis_file}")
             return self._load_analysis_data()
-
-        if self.force and self.analysis_file.exists():
-            logger.info(
-                f"🔄 Force flag enabled, skipping existing analysis and regenerating..."
-            )
 
         # For testing/development: Create a simplified file list without full PageRank analysis
         if self.max_files and self.max_files <= 100:
@@ -2903,42 +2951,12 @@ class ProductionEmbeddingFramework:
             )
             return self._create_simplified_file_list()
 
-        # Full PageRank analysis only for production runs
-        logger.info(f"📊 Analysis file not found, generating new PageRank analysis...")
-        logger.info(f"   This may take a few minutes for {self.work_dir}...")
-
-        # Run built-in analyzer
-        analysis_data = self.analyzer.analyze_files()
-
-        # Save analysis to file
-        with open(self.analysis_file, "w", encoding="utf-8") as f:
-            json.dump(analysis_data, f, indent=2, ensure_ascii=False)
-        logger.info(f"✅ Analysis saved to {self.analysis_file}")
-
-        # Convert to FileMetadata format
-        rankings = []
-        for item in analysis_data.get("file_rankings", []):
-            # Filter to only include fields that FileMetadata expects
-            filtered_item = {
-                "rank": item["rank"],
-                "file_path": item["file_path"],
-                "relative_path": item["relative_path"],
-                "file_name": item["file_name"],
-                "api_name": item["api_name"],
-                "file_size_mb": item["file_size_mb"],
-                "api_calls": item.get("api_calls", []),
-                "changelog_lines": item.get("changelog_lines", []),
-                "procedure_function_names": item.get("procedure_function_names", []),
-            }
-            metadata = FileMetadata(**filtered_item)
-            rankings.append(metadata)
-
-            # Apply max_files limit if specified
-            if self.max_files and len(rankings) >= self.max_files:
-                break
-
-        logger.info(f"Generated analysis for {len(rankings)} files")
-        return rankings
+        # Don't automatically generate analysis - let the caller decide
+        logger.info(f"📊 Analysis file not found at {self.analysis_file}")
+        logger.info(f"   Use 'analyze' command to generate analysis or 'embed' to run full pipeline")
+        
+        # Return empty rankings - caller can generate analysis if needed
+        return []
 
     def _create_simplified_file_list(self) -> List[FileMetadata]:
         """Create a simplified file list without PageRank analysis (for testing)."""
@@ -3052,26 +3070,56 @@ class ProductionEmbeddingFramework:
 
     def extract_metadata_only(self) -> Dict[str, Any]:
         """Extract file metadata and API calls without PageRank calculation."""
-        logger.info("🔍 Starting metadata extraction...")
+        
+        # If file_rankings is empty (e.g., due to force flag), process files directly
+        if not self.file_rankings:
+            logger.info("🔍 No pre-processed file rankings found, processing files directly...")
+            return self.analyzer.extract_metadata_only()
+        
+        logger.info("🔍 Using pre-loaded file metadata...")
 
-        # Find all PL/SQL files
-        plsql_files = list(self.work_dir.rglob("*.plsql"))
-        logger.info(f"Found {len(plsql_files)} PL/SQL files")
+        # Use the already processed file rankings from initialization
+        # Convert FileMetadata objects back to dict format
+        files_info = []
+        for file_metadata in self.file_rankings:
+            info = {
+                "file_path": file_metadata.file_path,
+                "relative_path": file_metadata.relative_path,
+                "file_name": file_metadata.file_name,
+                "api_name": file_metadata.api_name,
+                "file_size_mb": file_metadata.file_size_mb,
+                "api_calls": file_metadata.api_calls,
+                "changelog_lines": file_metadata.changelog_lines,
+                "procedure_function_names": file_metadata.procedure_function_names,
+            }
+            files_info.append(info)
 
-        if not plsql_files:
-            raise ValueError(f"No PL/SQL files found in {self.work_dir}")
+        logger.info(f"Using {len(files_info)} pre-processed files")
 
-        # Apply max_files limit early if specified
-        if self.max_files:
-            original_count = len(plsql_files)
-            plsql_files = plsql_files[: self.max_files]
-            logger.info(
-                f"🔢 Limited analysis to {len(plsql_files)} files (from {original_count} total)"
-            )
+        # Build reference graph (needed for dependency analysis)
+        logger.info("🔗 Building reference graph...")
+        reference_graph = self.analyzer.build_reference_graph(files_info)
 
-        # Update the analyzer with the limited file list and call extract_metadata_only
-        self.analyzer.plsql_files = plsql_files
-        return self.analyzer.extract_metadata_only()
+        # Prepare final analysis (without PageRank scoring)
+        analysis_metadata = {
+            "work_directory": str(self.work_dir),
+            "analysis_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "processing_stats": {
+                "total_files_found": len(files_info),
+                "total_files_processed": len(files_info),
+                "total_api_calls_found": sum(
+                    len(info["api_calls"]) for info in files_info
+                ),
+            },
+        }
+
+        return {
+            "analysis_metadata": analysis_metadata,
+            "file_info": files_info,
+            "reference_graph": {
+                k: list(v) for k, v in reference_graph.items()
+            },  # Convert sets to lists for JSON serialization
+        }
 
     def analyze_files(self) -> Dict[str, Any]:
         """Perform complete PageRank analysis of PL/SQL files with max_files support."""
@@ -3097,33 +3145,18 @@ class ProductionEmbeddingFramework:
         return self.analyzer.analyze_files()
 
     def _print_progress(self, progress: ProcessingProgress) -> None:
-        """Print formatted progress information."""
-        percent = (progress.files_processed / progress.total_files) * 100
+        """Update progress with minimal output."""
+        # Simple counter - no wrapping issues
+        print(f"\rProcessing: {progress.files_processed}/{progress.total_files} (✅{progress.files_successful} ❌{progress.files_failed})", end='', flush=True)
 
-        print(f"\n{'='*60}")
-        print(f"🚀 EMBEDDING PROGRESS: {percent:.1f}% Complete")
-        print(f"{'='*60}")
-        print(f"📊 Files: {progress.files_processed:,}/{progress.total_files:,}")
-        print(f"✅ Successful: {progress.files_successful:,}")
-        print(f"❌ Failed: {progress.files_failed:,}")
-        print(f"⚡ Rate: {progress.current_rate:.2f} files/sec")
+    def _close_progress_bar(self) -> None:
+        """Close the progress bar and print a newline."""
+        # Just print a newline to finish the progress line
+        print()
 
-        if progress.estimated_completion:
-            eta_str = progress.estimated_completion.strftime("%H:%M:%S")
-            remaining = progress.estimated_completion - datetime.now()
-            remaining_str = str(remaining).split(".")[0]  # Remove microseconds
-            print(f"⏰ ETA: {eta_str} (in {remaining_str})")
-
-        elapsed = timedelta(seconds=progress.total_processing_time)
-        elapsed_str = str(elapsed).split(".")[0]  # Remove microseconds
-        print(f"⏱️  Elapsed: {elapsed_str}")
-
-        if progress.current_file <= len(self.file_rankings):
-            current_file = self.file_rankings[progress.current_file - 1]
-            print(f"📄 Current: {current_file.file_name}")
-            print(f"🎯 Rank: #{current_file.rank}")
-
-        print(f"{'='*60}")
+    def __del__(self):
+        """Cleanup method to ensure progress bar is closed."""
+        self._close_progress_bar()
 
     async def run_embedding_pipeline(self, resume: bool = True) -> Dict[str, Any]:
         """Run the complete embedding pipeline with separated AI summarization."""
@@ -3183,6 +3216,9 @@ class ProductionEmbeddingFramework:
             "total_processing_time": phase1_stats.get("phase1_processing_time", 0)
             + phase2_stats.get("phase2_processing_time", 0),
         }
+
+        # Close progress bar
+        self._close_progress_bar()
 
         return final_stats
 
@@ -3295,7 +3331,7 @@ class ProductionEmbeddingFramework:
                 continue
 
             # Phase 1: Create basic result with content excerpt (CPU only)
-            logger.info(
+            logger.debug(
                 f"Phase 1: Processing {file_metadata.file_name} (rank {file_metadata.rank})"
             )
 
@@ -3731,22 +3767,20 @@ async def run_embedding_command(args) -> int:
     """Handle the embedding command."""
     try:
         # Import get_data_directory from directory utilities
-        from .directory_utils import get_data_directory, setup_embedding_directories
+        from .directory_utils import setup_analysis_engine_directories
 
-        # Use version-based directory structure
-        data_dir = get_data_directory()
-        safe_version = "".join(c for c in args.version if c.isalnum() or c in "._-")
-        base_dir = data_dir / "versions" / safe_version
-
-        work_dir, checkpoint_dir, analysis_file = setup_embedding_directories(
-            args.version
+        # Get all required directories using centralized functions
+        work_dir, checkpoint_dir, bm25s_dir, faiss_dir, analysis_file = (
+            setup_analysis_engine_directories(args.version)
         )
 
         # Initialize framework
-        framework = ProductionEmbeddingFramework(
+        framework = AnalysisEngine(
             work_dir=work_dir,
             analysis_file=analysis_file,
             checkpoint_dir=checkpoint_dir,
+            bm25s_dir=bm25s_dir,
+            faiss_dir=faiss_dir,
             model=args.model,
             max_files=args.max_files,
         )
@@ -3769,7 +3803,9 @@ async def run_embedding_command(args) -> int:
 
         if stats.get("faiss_index_built"):
             print(f"🧠 FAISS index built: {stats['faiss_embeddings']:,} embeddings")
-            print(f"📁 Search indexes saved to: {framework.bm25_indexer.index_dir}")
+            print(
+                f"📁 Search indexes saved to: {framework.bm25_indexer.bm25s_dir.parent}"
+            )
         elif stats.get("faiss_embeddings", 0) > 0:
             print(
                 f"⚠️  FAISS index build failed but {stats['faiss_embeddings']} embeddings generated"
