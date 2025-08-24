@@ -32,6 +32,11 @@ dependencies = [
     "flashrank>=0.2.9",
     "tiktoken>=0.11.0",
     "nltk>=3.9.1",
+    "accelerate>=1.10.0",
+    "psutil>=7.0.0",
+    "numba>=0.61.2",
+    "optimum[onnxruntime-gpu]>=1.17.1",
+    "triton-windows>=3.4.0.post20",
 ]
 
 [project.optional-dependencies]

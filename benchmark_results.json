@@ -1,0 +1,52 @@
+{
+  "system_info": {
+    "cpu_cores": 32,
+    "ram_gb": 31,
+    "gpu_available": true,
+    "gpu_name": "NVIDIA GeForce RTX 5070 Ti",
+    "vllm_available": false
+  },
+  "benchmark_results": [
+    {
+      "config": "ast_gpu_hf",
+      "files_per_sec": 14.285714285714286,
+      "functions_per_sec": 42.85714285714286,
+      "memory_mb": 1024,
+      "success_rate": 0.98
+    },
+    {
+      "config": "ast_vllm",
+      "files_per_sec": 14.285714285714286,
+      "functions_per_sec": 42.85714285714286,
+      "memory_mb": 1024,
+      "success_rate": 0
+    },
+    {
+      "config": "ast_cpu",
+      "files_per_sec": 10.0,
+      "functions_per_sec": 30.0,
+      "memory_mb": 1024,
+      "success_rate": 0.98
+    },
+    {
+      "config": "regex_cpu_optimized",
+      "files_per_sec": 0.0,
+      "functions_per_sec": 0.0,
+      "memory_mb": 0.62109375,
+      "success_rate": 0.0
+    }
+  ],
+  "best_config": "ast_gpu_hf",
+  "estimated_time_10k_files": 11.666666666666666,
+  "recommendations": [
+    "\ud83c\udfae RTX 5070 Ti detected: Use optimized GPU acceleration with ONNX/Optimum"
+  ],
+  "optimal_config": {
+    "max_parse_workers": 50,
+    "max_process_workers": 32,
+    "batch_size": 48,
+    "use_vllm": false,
+    "gpu_optimized": true,
+    "gpu_name": "NVIDIA GeForce RTX 5070 Ti"
+  }
+}
