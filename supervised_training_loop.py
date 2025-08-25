@@ -840,7 +840,7 @@ END IF;""",
 
 {keyword_insights}
 
-**Task:** Provide a single sentence summary that describes the business purpose of this procedure. Focus on the business value and functionality, not implementation details."""
+**Task:** Provide a single sentence summary that describes the business purpose of this procedure. Focus on the business value and functionality, not implementation details. Do not include the procedure name in your summary - describe what it does, not what it's called."""
 
         return prompt
 
@@ -896,7 +896,9 @@ END IF;""",
             # Generate initial summaries and prompts
             logger.info(f"Generating summaries for batch {self.current_iteration + 1}")
             for proc in self.current_batch:
-                proc["prompt"] = self.create_prompt(proc)  # Pre-generate and store prompt
+                proc["prompt"] = self.create_prompt(
+                    proc
+                )  # Pre-generate and store prompt
                 proc["generated_summary"] = self.generate_summary_for_procedure(proc)
                 proc["human_summary"] = proc[
                     "generated_summary"
@@ -1032,7 +1034,9 @@ END IF;""",
     def launch_review_gui(self):
         """Launch the GUI for reviewing summaries."""
         self.root = tk.Tk()
-        gui = SummaryReviewGUI(self.root, self.current_batch)  # Don't pass training loop
+        gui = SummaryReviewGUI(
+            self.root, self.current_batch
+        )  # Don't pass training loop
         gui.run()
         self.root = None
 
