@@ -48,10 +48,12 @@ python supervised_training_loop.py --model "Qwen/Qwen2.5-Coder-7B-Instruct" --if
 The training GUI provides an intuitive interface for reviewing procedure summaries:
 
 ### Layout
+
 - **Left Panel**: Context information (module, file, parameters, code snippets)
 - **Right Panel**: Generated summary editor with keyboard shortcuts
 
 ### Keyboard Shortcuts
+
 - **Enter**: Accept current summary as-is
 - **E**: Edit summary (focus text area)
 - **S**: Skip this procedure
@@ -60,7 +62,9 @@ The training GUI provides an intuitive interface for reviewing procedure summari
 - **Escape**: Cancel and exit
 
 ### Context Information
+
 Each procedure is presented with:
+
 - Module name and file location
 - Procedure name and filtered parameters (CRUD noise removed)
 - File header comments for business context
@@ -70,17 +74,20 @@ Each procedure is presented with:
 ## 🧠 Model Architecture
 
 ### Base Model
+
 - **Qwen2.5-Coder-7B-Instruct**: High-quality code understanding model
 - **Memory Usage**: ~14.2GB VRAM with fp16 precision
 - **Context Window**: 32k tokens for comprehensive code analysis
 
 ### Fine-tuning Strategy
+
 - **LoRA (Low-Rank Adaptation)**: Efficient fine-tuning with <1% trainable parameters
 - **Conservative Training**: 2 epochs, reduced learning rate, weight decay
 - **Gradient Clipping**: Prevents unstable training
 - **Mixed Precision**: fp16 for memory efficiency
 
 ### Training Parameters
+
 ```python
 r=16,                    # LoRA rank
 lora_alpha=32,          # LoRA scaling
@@ -93,19 +100,23 @@ max_grad_norm=1.0       # Gradient clipping
 ## 📊 Overfitting Prevention
 
 ### Validation Strategy
+
 - **Automatic Split**: 20% of labeled data held out for validation
 - **Early Stopping**: Monitors validation loss with patience=3
 - **Overfitting Detection**: Tracks validation loss trends
 - **Training Curves**: Visual monitoring of training progress
 
 ### Warning System
+
 - **Real-time Monitoring**: Validation loss calculated after each iteration
 - **User Alerts**: GUI warnings when overfitting is detected
 - **Recommendations**: Intelligent suggestions for training continuation
 - **Manual Override**: User can continue training despite warnings
 
 ### Conservative Defaults
+
 The system uses conservative settings to minimize overfitting risk:
+
 - Small learning rates
 - Limited epochs per iteration
 - Strong regularization
@@ -129,6 +140,7 @@ training_checkpoints/         # Model checkpoints and progress
 ## 🔄 Training Loop Details
 
 ### Iteration Process
+
 1. **Random Sampling**: Select 10 procedures not yet processed
 2. **Summary Generation**: Generate initial summaries with current model
 3. **Human Review**: GUI-based review with rich context
@@ -140,6 +152,7 @@ training_checkpoints/         # Model checkpoints and progress
 9. **Repeat**: Continue with expanded training data
 
 ### Progressive Learning
+
 - **Cumulative Training**: Each iteration includes all previous data
 - **Validation Monitoring**: Prevents overfitting across iterations
 - **Quality Control**: Only high-quality human-validated summaries used
@@ -161,6 +174,7 @@ training_checkpoints/         # Model checkpoints and progress
 6. **Progressive Validation**: Monitoring across all iterations
 
 ### Why Cumulative Training Works
+
 - **LoRA Efficiency**: Fine-tuning adapter weights, not full model
 - **Small Parameter Count**: <100M trainable vs 7B total parameters
 - **Domain Specificity**: Training on consistent IFS procedure patterns
@@ -168,6 +182,7 @@ training_checkpoints/         # Model checkpoints and progress
 - **Validation Monitoring**: Early detection of overfitting
 
 ### Recommended Practice
+
 - **Start Small**: Begin with 10 samples, validate, then expand
 - **Monitor Carefully**: Watch validation curves after each iteration
 - **Trust the System**: Early stopping will prevent overfitting
@@ -176,6 +191,7 @@ training_checkpoints/         # Model checkpoints and progress
 ## 🧪 Testing
 
 ### Test Components
+
 ```bash
 # Test GUI interface with mock data
 python test_training_system.py
@@ -185,7 +201,9 @@ python -c "from training_validator import TrainingValidator; TrainingValidator()
 ```
 
 ### Mock Data Testing
+
 The test system includes realistic IFS procedure examples:
+
 - Customer discount calculations
 - Inventory validation logic
 - Work order processing
@@ -194,13 +212,15 @@ The test system includes realistic IFS procedure examples:
 ## 📈 Performance Monitoring
 
 ### Metrics Tracked
+
 - **Training Loss**: Model learning progress
-- **Validation Loss**: Overfitting monitoring  
+- **Validation Loss**: Overfitting monitoring
 - **Acceptance Rate**: Human validation quality
 - **Processing Speed**: Procedures per hour
 - **Memory Usage**: GPU utilization
 
 ### Visual Monitoring
+
 - **Training Curves**: Loss progression over iterations
 - **Overfitting Signals**: Validation trend analysis
 - **Progress Reports**: Comprehensive training summaries
@@ -208,17 +228,19 @@ The test system includes realistic IFS procedure examples:
 ## 🔧 Configuration
 
 ### Environment Variables
+
 ```bash
 export CUDA_VISIBLE_DEVICES=0    # GPU selection
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128  # Memory optimization
 ```
 
 ### Custom Configuration
+
 ```python
 # In launch_training.py or custom script
 config = {
     "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
-    "ifs_source_path": "C:/repos/_ifs/25.1.0", 
+    "ifs_source_path": "C:/repos/_ifs/25.1.0",
     "batch_size": 10,
     "save_dir": "./training_checkpoints"
 }
@@ -234,6 +256,7 @@ config = {
 4. **Tkinter**: GUI requires tkinter (usually included with Python)
 
 ### Performance Optimization
+
 - **Use fp16**: Reduces memory usage by ~50%
 - **Gradient Accumulation**: Effective larger batch sizes
 - **LoRA Configuration**: Adjust rank (r) for memory/quality tradeoff
@@ -241,18 +264,20 @@ config = {
 ## 📚 Architecture Deep Dive
 
 ### Code Context Extraction
+
 The system extracts rich context for each procedure:
 
 ```python
 def extract_business_code(self, procedure: Dict) -> str:
     # Control structures (IF, WHILE, FOR)
-    # Business logic (non-CRUD operations) 
+    # Business logic (non-CRUD operations)
     # SQL operations and API calls
     # Exception handling patterns
     # Intelligent truncation with "..." markers
 ```
 
 ### Prompt Engineering
+
 Optimized prompts focus on business intent:
 
 ```python
@@ -269,7 +294,8 @@ Provide a business-focused summary."""
 ```
 
 ### Training Data Quality
-- **Parameter Filtering**: Removes info_, objid_, objversion_ noise
+
+- **Parameter Filtering**: Removes info*, objid*, objversion\_ noise
 - **Code Prioritization**: Control structures over declarations
 - **Business Focus**: Intent over implementation details
 - **Human Validation**: Expert review ensures quality
@@ -282,6 +308,7 @@ After several iterations, the model should generate summaries like:
 - **After**: "Validates customer credit limits against outstanding orders and applies hold status when limits are exceeded"
 
 The system produces:
+
 - **Concise**: Single sentence business summaries
 - **Accurate**: Human-validated and corrected
 - **Consistent**: Standardized format across procedures
@@ -292,6 +319,7 @@ The system produces:
 ## 🤝 Contributing
 
 The system is designed for extensibility:
+
 - **Custom Models**: Easy model swapping
 - **Enhanced Context**: Additional AST analysis
 - **GUI Improvements**: Extended keyboard shortcuts
@@ -303,4 +331,4 @@ This project follows the same license as the parent IFS Cloud MCP Server project
 
 ---
 
-*Happy Training! 🚀*
+_Happy Training! 🚀_
