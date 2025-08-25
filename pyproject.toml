@@ -42,7 +42,6 @@ dependencies = [
     "trl>=0.21.0",
     "matplotlib>=3.10.5",
     "datasets>=4.0.0",
-    "flash-attn",
 ]
 
 [project.optional-dependencies]
@@ -76,7 +75,6 @@ torch = [
     { index = "pytorch-cu126", extra = "gpu126" },
     { index = "pytorch-cpu", extra = "cpu" },
 ]
-flash-attn = { path = "wheels/flash_attn-2.7.4.post1+cu128.torch270-cp313-cp313-win_amd64.whl" }
 
 [[tool.uv.index]]
 name = "pytorch-cu129"

@@ -827,15 +827,6 @@ wheels = [
 ]
 
 [[package]]
-name = "einops"
-version = "0.8.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e5/81/df4fbe24dff8ba3934af99044188e20a98ed441ad17a274539b74e82e126/einops-0.8.1.tar.gz", hash = "sha256:de5d960a7a761225532e0f1959e5315ebeafc0cd43394732f103ca44b9837e84", size = 54805, upload-time = "2025-02-09T03:17:00.434Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/62/9773de14fe6c45c23649e98b83231fffd7b9892b6cf863251dc2afa73643/einops-0.8.1-py3-none-any.whl", hash = "sha256:919387eb55330f5757c6bea9165c5ff5cfe63a642682ea788a6d472576d81737", size = 64359, upload-time = "2025-02-09T03:17:01.998Z" },
-]
-
-[[package]]
 name = "email-validator"
 version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -970,29 +961,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/40/bb/0ab3e58d22305b6f5440629d20683af28959bf793d98d11950e305c1c326/filelock-3.19.1.tar.gz", hash = "sha256:66eda1888b0171c998b35be2bcc0f6d75c388a7ce20c3f3f37aa8e96c2dddf58", size = 17687, upload-time = "2025-08-14T16:56:03.016Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/42/14/42b2651a2f46b022ccd948bca9f2d5af0fd8929c4eec235b8d6d844fbe67/filelock-3.19.1-py3-none-any.whl", hash = "sha256:d38e30481def20772f5baf097c122c3babc4fcdb7e14e57049eb9d88c6dc017d", size = 15988, upload-time = "2025-08-14T16:56:01.633Z" },
-]
-
-[[package]]
-name = "flash-attn"
-version = "2.7.4.post1"
-source = { path = "wheels/flash_attn-2.7.4.post1+cu128.torch270-cp313-cp313-win_amd64.whl" }
-dependencies = [
-    { name = "einops" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-20-ifs-cloud-mcp-server-cpu') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu126') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu128' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129')" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu126') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu128' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra != 'extra-20-ifs-cloud-mcp-server-cpu' and extra != 'extra-20-ifs-cloud-mcp-server-gpu126' and extra != 'extra-20-ifs-cloud-mcp-server-gpu128' and extra != 'extra-20-ifs-cloud-mcp-server-gpu129')" },
-    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-20-ifs-cloud-mcp-server-cpu') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu126') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu128' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129')" },
-    { name = "torch", version = "2.8.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "extra == 'extra-20-ifs-cloud-mcp-server-gpu126' or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu128' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129')" },
-    { name = "torch", version = "2.8.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "extra == 'extra-20-ifs-cloud-mcp-server-gpu128' or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu126') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra != 'extra-20-ifs-cloud-mcp-server-gpu128' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129')" },
-    { name = "torch", version = "2.8.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" }, marker = "(extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu126') or (extra == 'extra-20-ifs-cloud-mcp-server-cpu' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra == 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu128') or (extra != 'extra-20-ifs-cloud-mcp-server-gpu128' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129') or (extra != 'extra-20-ifs-cloud-mcp-server-cpu' and extra != 'extra-20-ifs-cloud-mcp-server-gpu126' and extra == 'extra-20-ifs-cloud-mcp-server-gpu129')" },
-]
-wheels = [
-    { filename = "flash_attn-2.7.4.post1+cu128.torch270-cp313-cp313-win_amd64.whl", hash = "sha256:3d54227b378b5780e5b8b605faf29c32f6ed2de56f3b1c99576a6c4d65f71423" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "einops" },
-    { name = "torch" },
 ]
 
 [[package]]
@@ -1296,7 +1264,6 @@ dependencies = [
     { name = "datasets" },
     { name = "faiss-cpu" },
     { name = "fastmcp" },
-    { name = "flash-attn" },
     { name = "flashrank" },
     { name = "ifs-cloud-parser" },
     { name = "matplotlib" },
@@ -1347,7 +1314,6 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "faiss-cpu", specifier = ">=1.12.0" },
     { name = "fastmcp", specifier = ">=2.11.3" },
-    { name = "flash-attn", path = "wheels/flash_attn-2.7.4.post1+cu128.torch270-cp313-cp313-win_amd64.whl" },
     { name = "flashrank", specifier = ">=0.2.9" },
     { name = "ifs-cloud-parser", specifier = ">=0.3.0" },
     { name = "matplotlib", specifier = ">=3.10.5" },

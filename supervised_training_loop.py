@@ -39,24 +39,19 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 
-# Validate Flash Attention 2 installation
-try:
-    import flash_attn
-    FLASH_ATTN_AVAILABLE = True
-    print(f"✅ Flash Attention 2 available: {flash_attn.__version__}")
-except ImportError as e:
-    FLASH_ATTN_AVAILABLE = False
-    print(f"⚠️  Flash Attention 2 not available ({e}), using optimized standard attention")
-    # Enable memory efficient attention as fallback
-    torch.backends.cuda.enable_flash_sdp(True)
-    if hasattr(torch.backends.cuda, 'enable_math_sdp'):
-        torch.backends.cuda.enable_math_sdp(True)
-    if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
-        torch.backends.cuda.enable_mem_efficient_sdp(True)
+# PyTorch SDPA optimization (no need for flash_attn)
+SDPA_AVAILABLE = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+print(f"✅ PyTorch SDPA available: {SDPA_AVAILABLE}")
+
+# Enable optimized attention backends
+torch.backends.cuda.enable_flash_sdp(True)
+if hasattr(torch.backends.cuda, 'enable_math_sdp'):
+    torch.backends.cuda.enable_math_sdp(True)
+if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
 from datasets import Dataset
 import numpy as np
 
-# Local imports
 # Modern IFS Cloud parser using tree-sitter
 try:
     from ifs_parser_integration import IFSCloudParserIntegration
@@ -66,7 +61,8 @@ except ImportError as e:
     IFSCloudParserIntegration = None
     IFS_PARSER_AVAILABLE = False
     print(f"⚠️ IFS Cloud Parser not available: {e}")
-from src.ifs_cloud_mcp_server.directory_utils import find_ifs_source_directories
+
+# Training validator
 from training_validator import TrainingValidator
 
 logging.basicConfig(level=logging.INFO)
@@ -175,7 +171,7 @@ class SupervisedTrainingLoop:
         }
         
         # Add Flash Attention 2 if available, otherwise use SDPA
-        if FLASH_ATTN_AVAILABLE:
+        if SDPA_AVAILABLE:
             model_kwargs["attn_implementation"] = "flash_attention_2"
             print("🚀 Using Flash Attention 2 for maximum performance!")
         else:
@@ -395,41 +391,166 @@ class SupervisedTrainingLoop:
         return '\n'.join(header_lines[:20])  # First 20 header lines
 
     def generate_mock_procedures(self) -> List[Dict]:
+        """Generate mock procedure data for testing and demonstration."""
+        mock_procedures = [
+            {
+                'name': 'Process_Customer_Order___',
+                'procedure_name': 'Process_Customer_Order___',
+                'parameters': ['customer_id_', 'order_info_', 'result_'],
+                'body': '''PROCEDURE Process_Customer_Order___ (
+   customer_id_    IN VARCHAR2,
+   order_info_     IN VARCHAR2,
+   result_         OUT VARCHAR2) IS
+   
+   cursor_id_      NUMBER;
+   order_status_   VARCHAR2(20);
+BEGIN
+   -- Validate customer
+   IF customer_id_ IS NULL THEN
+      Error_SYS.Record_General('CUSTOMER_NULL', 'Customer ID cannot be null');
+   END IF;
+   
+   -- Process order
+   SELECT status INTO order_status_ 
+   FROM customer_order 
+   WHERE customer_id = customer_id_;
+   
+   IF order_status_ = 'ACTIVE' THEN
+      -- Update order processing
+      UPDATE customer_order 
+      SET process_date = SYSDATE 
+      WHERE customer_id = customer_id_;
+      
+      result_ := 'ORDER_PROCESSED';
+   END IF;
+END Process_Customer_Order___;''',
+                'business_code': '''-- Validate customer
+IF customer_id_ IS NULL THEN
+   Error_SYS.Record_General('CUSTOMER_NULL', 'Customer ID cannot be null');
+END IF;
 
-    def extract_business_code(self, procedure: Dict) -> str:
-        """Extract business-relevant code from procedure."""
-        body = procedure.get('body', '')
-        ast_info = procedure.get('ast_info', {})
+-- Process order
+SELECT status INTO order_status_ 
+FROM customer_order 
+WHERE customer_id = customer_id_;
+
+IF order_status_ = 'ACTIVE' THEN
+   -- Update order processing
+   UPDATE customer_order 
+   SET process_date = SYSDATE 
+   WHERE customer_id = customer_id_;
+   
+   result_ := 'ORDER_PROCESSED';
+END IF;''',
+                'file_path': 'mock/customer_order_api.plsql',
+                'module_name': 'orderprocessing',
+                'file_header': '''-- IFS Cloud Customer Order API
+-- Purpose: Handle customer order processing and validation
+-- Created: 2024
+-- Module: Order Processing''',
+                'line_number': 120,
+                'context': 'Module: orderprocessing\nFile: customer_order_api.plsql\n-- IFS Cloud Customer Order API\n-- Purpose: Handle customer order processing...',
+                'type': 'procedure'
+            },
+            {
+                'name': 'Validate_Purchase_Req___',
+                'procedure_name': 'Validate_Purchase_Req___',
+                'parameters': ['req_no_', 'validation_result_'],
+                'body': '''PROCEDURE Validate_Purchase_Req___ (
+   req_no_            IN VARCHAR2,
+   validation_result_ OUT VARCHAR2) IS
+   
+   req_status_        VARCHAR2(20);
+   authorized_        VARCHAR2(5);
+BEGIN
+   -- Check requisition status
+   SELECT status, authorized 
+   INTO req_status_, authorized_
+   FROM purchase_req_header
+   WHERE req_no = req_no_;
+   
+   IF req_status_ != 'RELEASED' THEN
+      validation_result_ := 'REQ_NOT_RELEASED';
+      RETURN;
+   END IF;
+   
+   IF authorized_ != 'TRUE' THEN
+      validation_result_ := 'REQ_NOT_AUTHORIZED';
+      RETURN;
+   END IF;
+   
+   validation_result_ := 'VALIDATION_OK';
+END Validate_Purchase_Req___;''',
+                'business_code': '''-- Check requisition status
+SELECT status, authorized 
+INTO req_status_, authorized_
+FROM purchase_req_header
+WHERE req_no = req_no_;
+
+IF req_status_ != 'RELEASED' THEN
+   validation_result_ := 'REQ_NOT_RELEASED';
+   RETURN;
+END IF;
+
+IF authorized_ != 'TRUE' THEN
+   validation_result_ := 'REQ_NOT_AUTHORIZED';
+   RETURN;
+END IF;
+
+validation_result_ := 'VALIDATION_OK';''',
+                'file_path': 'mock/purchase_req_api.plsql',
+                'module_name': 'purchasing',
+                'file_header': '''-- IFS Cloud Purchase Requisition API
+-- Purpose: Handle purchase requisition validation and processing
+-- Created: 2024
+-- Module: Purchasing''',
+                'line_number': 85,
+                'context': 'Module: purchasing\nFile: purchase_req_api.plsql\n-- IFS Cloud Purchase Requisition API...',
+                'type': 'procedure'
+            }
+        ]
         
-        # Focus on control structures and business logic
-        important_parts = []
+        # Add more varied procedures to reach desired count
+        base_procedures = ['Invoice_Processing___', 'Asset_Validation___', 'Project_Setup___', 
+                          'Person_Management___', 'Financial_Posting___']
+        modules = ['accounting', 'assets', 'projects', 'hrm', 'finance']
         
-        # Add control structures if available
-        if 'control_structures' in ast_info:
-            for structure in ast_info['control_structures'][:5]:  # Limit to 5
-                important_parts.append(f"-- {structure['type']}: {structure.get('condition', '')}")
+        for i, (proc_name, module) in enumerate(zip(base_procedures, modules)):
+            mock_procedures.append({
+                'name': proc_name,
+                'procedure_name': proc_name,
+                'parameters': ['input_param_', 'result_param_'],
+                'body': f'''PROCEDURE {proc_name} IS
+   temp_var_   VARCHAR2(100);
+   status_     VARCHAR2(20);
+BEGIN
+   -- Business logic for {proc_name.replace('_', ' ').title()}
+   SELECT status INTO status_ FROM {module}_table WHERE id = input_param_;
+   
+   IF status_ = 'ACTIVE' THEN
+      -- Process the {module} operation
+      temp_var_ := 'PROCESSED_' || input_param_;
+      result_param_ := temp_var_;
+   END IF;
+END {proc_name};''',
+                'business_code': f'''SELECT status INTO status_ FROM {module}_table WHERE id = input_param_;
+
+IF status_ = 'ACTIVE' THEN
+   -- Process the {module} operation
+   temp_var_ := 'PROCESSED_' || input_param_;
+   result_param_ := temp_var_;
+END IF;''',
+                'file_path': f'mock/{module}_api.plsql',
+                'module_name': module,
+                'file_header': f'''-- IFS Cloud {module.title()} API
+-- Purpose: Handle {module} operations
+-- Module: {module.title()}''',
+                'line_number': 50 + i * 10,
+                'context': f'Module: {module}\nFile: {module}_api.plsql\n-- IFS Cloud {module.title()} API...',
+                'type': 'procedure'
+            })
         
-        # Add first 10 lines of actual code (skip declarations)
-        lines = body.split('\n')
-        code_lines = []
-        skip_declaration = True
-        
-        for line in lines:
-            stripped = line.strip().upper()
-            if any(keyword in stripped for keyword in ['BEGIN', 'IF', 'WHILE', 'FOR', 'SELECT']):
-                skip_declaration = False
-            
-            if not skip_declaration and stripped:
-                code_lines.append(line)
-                if len(code_lines) >= 10:
-                    break
-        
-        if code_lines:
-            important_parts.extend(code_lines)
-            if len(lines) > len(code_lines) + 10:  # Show there's more
-                important_parts.append("  -- ... (more code below)")
-        
-        return '\n'.join(important_parts)
+        return mock_procedures
 
     def generate_summary_for_procedure(self, procedure: Dict) -> str:
         """Generate initial summary for a procedure using the model."""
@@ -692,7 +813,7 @@ Provide a single sentence summary that describes the business purpose of this pr
         training_args = TrainingArguments(
             output_dir=str(self.save_dir / f"training_iteration_{self.current_iteration}"),
             num_train_epochs=2,  # Reduced from 3 to prevent overfitting
-            per_device_train_batch_size=2 if FLASH_ATTN_AVAILABLE else 1,  # Larger batch with Flash Attention
+            per_device_train_batch_size=2 if SDPA_AVAILABLE else 1,  # Larger batch with SDPA
             gradient_accumulation_steps=4,
             warmup_steps=max(5, len(train_data) // 10),  # Dynamic warmup
             learning_rate=5e-5,  # Reduced learning rate
@@ -703,7 +824,7 @@ Provide a single sentence summary that describes the business purpose of this pr
             remove_unused_columns=False,
             weight_decay=0.01,  # Add weight decay for regularization
             max_grad_norm=1.0,  # Gradient clipping
-            dataloader_num_workers=4 if FLASH_ATTN_AVAILABLE else 2,  # More workers with Flash Attention
+            dataloader_num_workers=4 if SDPA_AVAILABLE else 2,  # More workers with SDPA
             dataloader_pin_memory=True,  # Pin memory for faster GPU transfer
             ddp_find_unused_parameters=False,  # Optimization for single GPU
             report_to=[],  # Disable wandb/tensorboard for speed
