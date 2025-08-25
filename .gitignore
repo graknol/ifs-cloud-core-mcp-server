@@ -15,11 +15,13 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
+wheels/*
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+
+!wheels/README.md
 
 # Virtual environments
 venv/

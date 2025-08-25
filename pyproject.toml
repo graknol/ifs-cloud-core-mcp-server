@@ -7,10 +7,8 @@ name = "ifs-cloud-mcp-server"
 version = "0.1.0"
 description = "MCP Server for IFS Cloud with hybrid search (BM25S + FAISS) integration"
 readme = "README.md"
-license = {file = "LICENSE"}
-authors = [
-    {name = "IFS Cloud Team"}
-]
+license = { file = "LICENSE" }
+authors = [{ name = "IFS Cloud Team" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -40,6 +38,11 @@ dependencies = [
     "ninja>=1.10.0",
     "ifs-cloud-parser>=0.3.0",
     "tree-sitter>=0.25.1",
+    "peft>=0.17.1",
+    "trl>=0.21.0",
+    "matplotlib>=3.10.5",
+    "datasets>=4.0.0",
+    "flash-attn",
 ]
 
 [project.optional-dependencies]
@@ -51,37 +54,29 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
-gpu129 = [
-    "torch>=2.8.0"
-]
-gpu128 = [
-    "torch>=2.8.0"
-]
-gpu126 = [
-    "torch>=2.8.0"
-]
-cpu = [
-    "torch>=2.8.0"
-]
+gpu129 = ["torch>=2.8.0"]
+gpu128 = ["torch>=2.8.0"]
+gpu126 = ["torch>=2.8.0"]
+cpu = ["torch>=2.8.0"]
 
 [tool.uv]
 conflicts = [
-  [
-    { extra = "cpu" },
-    { extra = "gpu129" },
-    { extra = "gpu128" },
-    { extra = "gpu126" },
-  ],
+    [
+        { extra = "cpu" },
+        { extra = "gpu129" },
+        { extra = "gpu128" },
+        { extra = "gpu126" },
+    ],
 ]
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu129",  extra = "gpu129" },
-    { index = "pytorch-cu128",  extra = "gpu128" },
-    { index = "pytorch-cu126",  extra = "gpu126" },
-    { index = "pytorch-cpu",  extra = "cpu" },
+    { index = "pytorch-cu129", extra = "gpu129" },
+    { index = "pytorch-cu128", extra = "gpu128" },
+    { index = "pytorch-cu126", extra = "gpu126" },
+    { index = "pytorch-cpu", extra = "cpu" },
 ]
-# nvidia-tensorrt = { index = "nvidia-tensorrt" }  # Not available for Windows
+flash-attn = { path = "wheels/flash_attn-2.7.4.post1+cu128.torch270-cp313-cp313-win_amd64.whl" }
 
 [[tool.uv.index]]
 name = "pytorch-cu129"
