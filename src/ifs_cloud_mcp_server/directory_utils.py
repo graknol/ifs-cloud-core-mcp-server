@@ -206,6 +206,41 @@ def setup_analysis_engine_directories(
     return source_dir, checkpoint_dir, bm25s_dir, faiss_dir, analysis_file
 
 
+def find_ifs_source_directories(base_path: str) -> List[Path]:
+    """
+    Find all IFS source directories from a base installation path.
+    
+    Args:
+        base_path: Base path to search for IFS source directories
+        
+    Returns:
+        List of Path objects pointing to source directories
+    """
+    logger.info(f"Searching for IFS source directories in: {base_path}")
+    
+    base_path_obj = Path(base_path)
+    if not base_path_obj.exists():
+        logger.warning(f"Base path does not exist: {base_path}")
+        return []
+    
+    source_dirs = []
+    
+    # Look for directories that contain 'source' subdirectory
+    # This matches IFS Cloud module structure like: accrul/source, fndbas/source, etc.
+    for module_dir in base_path_obj.iterdir():
+        if module_dir.is_dir():
+            source_subdir = module_dir / "source"
+            if source_subdir.exists() and source_subdir.is_dir():
+                # Check if it contains .plsql files to confirm it's an IFS source directory
+                plsql_files = list(source_subdir.rglob("*.plsql"))
+                if plsql_files:
+                    source_dirs.append(source_subdir)
+                    logger.debug(f"Found IFS source directory: {source_subdir}")
+    
+    logger.info(f"Found {len(source_dirs)} IFS source directories")
+    return source_dirs
+
+
 def get_supported_extensions() -> Set[str]:
     """Get the set of file extensions that IFS Cloud MCP Server supports."""
     return {
