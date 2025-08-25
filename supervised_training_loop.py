@@ -893,9 +893,10 @@ END IF;""",
                 logger.info("No more procedures to process")
                 break
 
-            # Generate initial summaries
+            # Generate initial summaries and prompts
             logger.info(f"Generating summaries for batch {self.current_iteration + 1}")
             for proc in self.current_batch:
+                proc["prompt"] = self.create_prompt(proc)  # Pre-generate and store prompt
                 proc["generated_summary"] = self.generate_summary_for_procedure(proc)
                 proc["human_summary"] = proc[
                     "generated_summary"
@@ -1031,7 +1032,7 @@ END IF;""",
     def launch_review_gui(self):
         """Launch the GUI for reviewing summaries."""
         self.root = tk.Tk()
-        gui = SummaryReviewGUI(self.root, self.current_batch)
+        gui = SummaryReviewGUI(self.root, self.current_batch)  # Don't pass training loop
         gui.run()
         self.root = None
 
@@ -1647,8 +1648,8 @@ the summary as needed. All changes are auto-saved."""
         self.context_text.insert(tk.END, context_info)
         self.context_text.config(state=tk.DISABLED)
 
-        # Update prompt display (middle panel)
-        prompt = self.create_prompt(proc)
+        # Update prompt display (middle panel) - use pre-generated prompt
+        prompt = proc.get("prompt", "No prompt available")
         self.prompt_text.config(state=tk.NORMAL)
         self.prompt_text.delete(1.0, tk.END)
         self.prompt_text.insert(tk.END, prompt)
