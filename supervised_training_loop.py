@@ -49,8 +49,28 @@ if hasattr(torch.backends.cuda, 'enable_math_sdp'):
     torch.backends.cuda.enable_math_sdp(True)
 if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
     torch.backends.cuda.enable_mem_efficient_sdp(True)
+
+# Check for Triton availability for custom kernels
+try:
+    import triton
+    TRITON_AVAILABLE = True
+    print(f"✅ Triton available: {triton.__version__} (for custom kernel optimizations)")
+except ImportError:
+    TRITON_AVAILABLE = False
+    print("⚠️ Triton not available - using standard PyTorch kernels")
+
+# Check for optimum/ONNX optimizations
+try:
+    import optimum
+    OPTIMUM_AVAILABLE = True
+    print(f"✅ Optimum available (for inference optimization)")
+except ImportError:
+    OPTIMUM_AVAILABLE = False
 from datasets import Dataset
 import numpy as np
+import pandas as pd
+import csv
+from pathlib import Path
 
 # Modern IFS Cloud parser using tree-sitter
 try:
@@ -90,13 +110,18 @@ class SupervisedTrainingLoop:
         self.current_batch = []  # Current batch being reviewed
         self.procedures_pool = []  # All available procedures
         
-        # Performance optimizations
+        # RTX 5070 Ti Performance optimizations
         if torch.cuda.is_available():
-            # Enable optimized CUDA operations
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            print(f"🎯 CUDA optimizations enabled on {torch.cuda.get_device_name()}")
+            # CUDA optimizations for training + inference
+            torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+            torch.backends.cuda.matmul.allow_tf32 = True  # Use TF32 for matmul (faster)
+            torch.backends.cudnn.allow_tf32 = True  # Use TF32 for convolutions
+            torch.backends.cuda.enable_cudnn_sdp = True  # Enable cuDNN SDPA
+            
+            # Memory optimizations for RTX 5070 Ti (16GB VRAM)
+            torch.cuda.empty_cache()  # Start with clean memory
+            print(f"🎯 RTX optimizations enabled on {torch.cuda.get_device_name()}")
+            print(f"💾 Available VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB")
         
         # Validation system
         self.validator = TrainingValidator(save_dir=save_dir)
@@ -105,6 +130,10 @@ class SupervisedTrainingLoop:
         self.tokenizer = None
         self.model = None
         self.peft_model = None
+        
+        # Load IFS Cloud important keywords for context enhancement
+        self.important_keywords = self.load_important_keywords()
+        print(f"✅ Loaded {len(self.important_keywords)} IFS Cloud keywords for context enhancement")
         
         # GUI components
         self.root = None
@@ -149,6 +178,76 @@ class SupervisedTrainingLoop:
         
         logger.info(f"Saved training state: {len(self.all_summaries)} summaries")
 
+    def load_important_keywords(self) -> dict:
+        """Load important IFS Cloud keywords from the curated CSV file."""
+        keywords = {}
+        keywords_file = Path("final_optimizer_keywords.csv")
+        
+        if not keywords_file.exists():
+            logger.warning(f"Keywords file {keywords_file} not found, using empty keywords")
+            return {}
+        
+        try:
+            with open(keywords_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    keyword = row['keyword'].strip()
+                    # Store keyword with metadata for scoring importance
+                    keywords[keyword] = {
+                        'total_occurrences': int(row.get('total_occurrences', 0)),
+                        'primary_occurrences': int(row.get('primary_occurrences', 0)),
+                        'variant_count': int(row.get('variant_count', 0)),
+                        'sources': row.get('sources', ''),
+                        'notes': row.get('notes', '')
+                    }
+                    
+            logger.info(f"Loaded {len(keywords)} important keywords from {keywords_file}")
+            return keywords
+            
+        except Exception as e:
+            logger.error(f"Error loading keywords: {e}")
+            return {}
+
+    def enhance_context_with_keywords(self, context: str, procedure_name: str = "") -> str:
+        """Enhance context by highlighting important IFS Cloud keywords."""
+        if not self.important_keywords:
+            return context
+        
+        enhanced_context = context
+        highlighted_keywords = []
+        
+        # Find keywords present in the context (case-insensitive)
+        context_lower = context.lower()
+        for keyword, info in self.important_keywords.items():
+            if keyword.lower() in context_lower:
+                # Only highlight if it's a significant keyword (high occurrence)
+                if info['total_occurrences'] > 5000:  # High importance threshold
+                    highlighted_keywords.append({
+                        'keyword': keyword,
+                        'importance': 'HIGH',
+                        'occurrences': info['total_occurrences']
+                    })
+                elif info['total_occurrences'] > 1000:  # Medium importance
+                    highlighted_keywords.append({
+                        'keyword': keyword,
+                        'importance': 'MEDIUM', 
+                        'occurrences': info['total_occurrences']
+                    })
+        
+        # Add keyword emphasis to the context if we found important ones
+        if highlighted_keywords:
+            # Sort by importance (occurrences)
+            highlighted_keywords.sort(key=lambda x: x['occurrences'], reverse=True)
+            
+            keyword_note = "\n\n=== IMPORTANT IFS CLOUD KEYWORDS DETECTED ===\n"
+            for kw in highlighted_keywords[:10]:  # Top 10 most important
+                keyword_note += f"• {kw['keyword'].upper()} ({kw['importance']} importance - {kw['occurrences']:,} occurrences in IFS codebase)\n"
+            
+            keyword_note += "\nThese keywords indicate specific IFS Cloud business patterns and should be emphasized in the summary.\n"
+            enhanced_context = context + keyword_note
+        
+        return enhanced_context
+
     def initialize_model(self):
         """Initialize the model and tokenizer."""
         logger.info(f"Loading model: {self.model_name}")
@@ -162,26 +261,35 @@ class SupervisedTrainingLoop:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # Configure model loading with Flash Attention 2 if available
+        # Configure model loading with optimized attention
         model_kwargs = {
             "torch_dtype": torch.float16,
             "device_map": "auto",
             "trust_remote_code": True,
-            "use_cache": True  # Enable KV caching for inference speedup
+            "use_cache": True,  # Enable KV caching for inference speedup
+            "attn_implementation": "sdpa"  # Use PyTorch's optimized SDPA
         }
         
-        # Add Flash Attention 2 if available, otherwise use SDPA
-        if SDPA_AVAILABLE:
-            model_kwargs["attn_implementation"] = "flash_attention_2"
-            print("🚀 Using Flash Attention 2 for maximum performance!")
-        else:
-            model_kwargs["attn_implementation"] = "sdpa"  # Use PyTorch's optimized SDPA
-            print("⚡ Using PyTorch SDPA (Scaled Dot Product Attention) for optimized performance")
+        print("⚡ Using PyTorch SDPA (Scaled Dot Product Attention) for optimized performance")
         
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             **model_kwargs
         )
+        
+        # RTX 5070 Ti optimization: Compile model for faster training/inference
+        try:
+            if torch.cuda.is_available() and hasattr(torch, 'compile'):
+                print("🚀 Compiling model with torch.compile for RTX optimization...")
+                self.model = torch.compile(
+                    self.model, 
+                    mode="default",  # Balanced speed/memory tradeoff
+                    dynamic=True,    # Handle variable sequence lengths
+                    backend="inductor"  # Use Triton-powered backend if available
+                )
+                print("✅ Model compilation complete - expect faster training!")
+        except Exception as e:
+            print(f"⚠️ Model compilation failed (using uncompiled model): {e}")
         
         # Check for existing checkpoint
         checkpoint_dir = self.save_dir / f"checkpoint_iteration_{self.current_iteration}"
@@ -619,18 +727,57 @@ END IF;''',
         
         param_list = ', '.join(filtered_params) if filtered_params else 'no parameters'
         
+        # Generate keyword insights separately (don't mix with code)
+        keyword_insights = self.generate_keyword_insights(business_code, procedure_name=name)
+        
+        # Build prompt with clean separation
         prompt = f"""Analyze this IFS Cloud procedure and provide a concise business summary:
 
-Module: {module}
-Procedure: {name}
-Parameters: {param_list}
+**Module:** {module}
+**Procedure:** {name}
+**Parameters:** {param_list}
 
-Code Logic:
+**Code Logic:**
+<code>
 {business_code}
+</code>
 
-Provide a single sentence summary that describes the business purpose of this procedure."""
+{keyword_insights}
+
+**Task:** Provide a single sentence summary that describes the business purpose of this procedure. Focus on the business value and functionality, not implementation details."""
         
         return prompt
+
+    def generate_keyword_insights(self, text: str, procedure_name: str = None) -> str:
+        """Generate keyword insights as guidance (separate from code)."""
+        if not hasattr(self, 'important_keywords') or not self.important_keywords:
+            return ""
+        
+        insights = []
+        found_keywords = {}
+        
+        # Search for keywords in the text (case-insensitive)
+        text_lower = text.lower()
+        
+        for keyword, metadata in self.important_keywords.items():
+            if keyword.lower() in text_lower:
+                total_count = metadata.get('total_occurrences', 0)
+                found_keywords[keyword] = total_count
+        
+        if found_keywords:
+            # Sort by importance (total occurrences)
+            sorted_keywords = sorted(found_keywords.items(), key=lambda x: x[1], reverse=True)
+            top_keywords = sorted_keywords[:3]  # Top 3 most important
+            
+            keyword_list = [f"{kw} ({count:,} occurrences)" for kw, count in top_keywords]
+            insights.append(f"**Key IFS Concepts Detected:** {', '.join(keyword_list)}")
+            
+            # Add high-importance guidance
+            high_importance = [kw for kw, count in top_keywords if count > 10000]
+            if high_importance:
+                insights.append(f"**High Impact Areas:** This procedure involves {', '.join(high_importance)}, which are core IFS business concepts.")
+        
+        return '\n'.join(insights) if insights else ""
 
     def run_training_loop(self):
         """Main training loop."""
@@ -809,25 +956,31 @@ Provide a single sentence summary that describes the business purpose of this pr
         if self.peft_model is None:
             self.setup_peft_model()
         
-        # Training arguments - Optimized for Flash Attention 2
+        # Training arguments - Optimized for RTX 5070 Ti with 16GB VRAM
         training_args = TrainingArguments(
             output_dir=str(self.save_dir / f"training_iteration_{self.current_iteration}"),
             num_train_epochs=2,  # Reduced from 3 to prevent overfitting
-            per_device_train_batch_size=2 if SDPA_AVAILABLE else 1,  # Larger batch with SDPA
-            gradient_accumulation_steps=4,
+            per_device_train_batch_size=4 if SDPA_AVAILABLE else 2,  # Larger batch with SDPA + RTX optimization
+            gradient_accumulation_steps=2,  # Reduced since we can use larger batch
             warmup_steps=max(5, len(train_data) // 10),  # Dynamic warmup
             learning_rate=5e-5,  # Reduced learning rate
-            fp16=True,
+            fp16=True,  # Mixed precision for RTX 5070 Ti
             logging_steps=5,
             save_strategy="epoch",
             evaluation_strategy="no",
             remove_unused_columns=False,
             weight_decay=0.01,  # Add weight decay for regularization
             max_grad_norm=1.0,  # Gradient clipping
-            dataloader_num_workers=4 if SDPA_AVAILABLE else 2,  # More workers with SDPA
+            dataloader_num_workers=6,  # Optimized for RTX 5070 Ti
             dataloader_pin_memory=True,  # Pin memory for faster GPU transfer
+            dataloader_prefetch_factor=4,  # Prefetch for RTX performance
             ddp_find_unused_parameters=False,  # Optimization for single GPU
             report_to=[],  # Disable wandb/tensorboard for speed
+            # RTX-specific optimizations
+            torch_compile=True,  # Enable PyTorch 2.0 compilation
+            optim="adamw_torch_fused",  # Fused optimizer for RTX
+            group_by_length=True,  # Group similar lengths for efficiency
+            dataloader_drop_last=True,  # Consistent batch sizes for cuDNN optimization
         )
         
         # Data collator
@@ -1384,33 +1537,6 @@ the summary as needed. All changes are auto-saved."""
  14  -- More procedures would appear here...
  15  
  16  END Test_API;"""
-
-    def create_prompt(self, procedure: Dict) -> str:
-        """Create a prompt for the model based on procedure context."""
-        name = procedure['name']
-        params = procedure.get('parameters', [])
-        business_code = procedure.get('business_code', '')
-        module = procedure.get('module_name', 'unknown')
-        
-        # Filter out common CRUD parameters
-        filtered_params = [p for p in params 
-                          if not any(crud in p.lower() for crud in 
-                                   ['info_', 'objid_', 'objversion_', 'attr_', 'action_'])]
-        
-        param_list = ', '.join(filtered_params) if filtered_params else 'no parameters'
-        
-        prompt = f"""Analyze this IFS Cloud procedure and provide a concise business summary:
-
-Module: {module}
-Procedure: {name}
-Parameters: {param_list}
-
-Code Logic:
-{business_code}
-
-Provide a single sentence summary that describes the business purpose of this procedure."""
-        
-        return prompt
 
     def accept_summary(self):
         """Accept the current summary."""
