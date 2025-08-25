@@ -15,21 +15,37 @@ from supervised_training_loop import SupervisedTrainingLoop
 
 
 def main():
+    # Set CUDA memory management environment variables
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Better error reporting
+
     print("🚀 Starting IFS Cloud Supervised Training Loop")
     print("=" * 50)
 
-    # Default configuration
+    # Configuration for two-phase approach:
+    # Phase 1: Generate all summaries with larger model
+    # Phase 2: Fine-tune smaller model with multiple epochs + augmentation
     config = {
-        "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "summary_model_name": "unsloth/Qwen2.5-7B-Instruct",  # Large model for quality generation
+        "training_model_name": "unsloth/Qwen2.5-1.5B-Instruct",  # Small model for fine-tuning
         "ifs_source_path": "C:/repos/_ifs/25.1.0",
-        "batch_size": 10,
+        "batch_size": 8,  # Can be larger for generation phase
+        "max_length": 4096,  # Generous context for detailed procedures
         "save_dir": "./training_checkpoints",
+        "target_summaries": 200,  # Generate all 200 summaries first
+        "training_epochs": 15,  # Multiple epochs for limited dataset
+        "data_augmentation": True,  # Enable randomization strategies
+        "two_phase_training": True,  # Enable two-phase approach
     }
 
-    print(f"Model: {config['model_name']}")
-    print(f"IFS Source: {config['ifs_source_path']}")
-    print(f"Batch Size: {config['batch_size']}")
-    print(f"Save Directory: {config['save_dir']}")
+    print(f"📊 Two-Phase Training Strategy:")
+    print(f"  Phase 1 - Summary Generation: {config['summary_model_name']}")
+    print(f"  Phase 2 - Fine-tuning: {config['training_model_name']}")
+    print(f"🎯 Target: {config['target_summaries']} summaries")
+    print(f"🔄 Training Epochs: {config['training_epochs']}")
+    print(f"🎲 Data Augmentation: {config['data_augmentation']}")
+    print(f"📁 IFS Source: {config['ifs_source_path']}")
+    print(f"💾 Save Directory: {config['save_dir']}")
     print()
 
     # Check if IFS source exists

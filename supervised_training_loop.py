@@ -19,6 +19,7 @@ Key Features:
 import os
 import json
 import random
+import re
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -30,6 +31,7 @@ import queue
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -99,17 +101,48 @@ class SupervisedTrainingLoop:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2.5-Coder-7B-Instruct",
+        summary_model_name: str = "unsloth/Qwen2.5-7B-Instruct",  # Large model for generation
+        training_model_name: str = "unsloth/Qwen2.5-1.5B-Instruct",  # Small model for fine-tuning
         ifs_source_path: str = "C:/repos/_ifs/25.1.0",
-        batch_size: int = 10,
+        batch_size: int = 8,
+        max_length: int = 4096,
         save_dir: str = "./training_checkpoints",
+        target_summaries: int = 200,
+        training_epochs: int = 15,
+        data_augmentation: bool = True,
+        two_phase_training: bool = True,
+        # Legacy parameters for backward compatibility
+        model_name: str = None,
+        use_separate_summary_model: bool = None,
     ):
 
-        self.model_name = model_name
+        # Handle legacy parameters
+        if model_name and not training_model_name:
+            training_model_name = model_name
+        if use_separate_summary_model is False:
+            summary_model_name = training_model_name
+
+        self.summary_model_name = summary_model_name
+        self.training_model_name = training_model_name
         self.ifs_source_path = ifs_source_path
         self.batch_size = batch_size
+        self.max_length = max_length
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True)
+
+        # Two-phase training configuration
+        self.target_summaries = target_summaries
+        self.training_epochs = training_epochs
+        self.data_augmentation = data_augmentation
+        self.two_phase_training = two_phase_training
+        self.generation_phase_complete = False
+
+        print(
+            f"🔄 Two-Phase Training: {'Enabled' if two_phase_training else 'Disabled'}"
+        )
+        print(f"📊 Target Summaries: {target_summaries}")
+        print(f"🔄 Training Epochs: {training_epochs}")
+        print(f"🎲 Data Augmentation: {data_augmentation}")
 
         # Training state
         self.current_iteration = 0
@@ -137,8 +170,12 @@ class SupervisedTrainingLoop:
 
         # Model components
         self.tokenizer = None
-        self.model = None
+        self.model = None  # Fine-tuning model (small)
         self.peft_model = None
+
+        # Summary generation model (potentially larger)
+        self.summary_tokenizer = None
+        self.summary_model = None
 
         # Load IFS Cloud important keywords for context enhancement
         self.important_keywords = self.load_important_keywords()
@@ -172,9 +209,21 @@ class SupervisedTrainingLoop:
 
     def save_training_state(self):
         """Save current training state."""
+        # Create JSON-safe version of summaries (remove non-serializable objects)
+        json_safe_summaries = []
+        for summary in self.all_summaries:
+            safe_summary = summary.copy()
+            if "parsed_info" in safe_summary:
+                # Remove the tree object which is not JSON serializable
+                safe_parsed_info = safe_summary["parsed_info"].copy()
+                if "tree" in safe_parsed_info:
+                    del safe_parsed_info["tree"]
+                safe_summary["parsed_info"] = safe_parsed_info
+            json_safe_summaries.append(safe_summary)
+
         state = {
             "current_iteration": self.current_iteration,
-            "all_summaries": self.all_summaries,
+            "all_summaries": json_safe_summaries,
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -208,18 +257,50 @@ class SupervisedTrainingLoop:
                 reader = csv.DictReader(f)
                 for row in reader:
                     keyword = row["keyword"].strip()
+
+                    # Extract variants from the variants_with_scores column
+                    variants = []
+                    variants_str = row.get("variants_with_scores", "")
+                    if variants_str:
+                        # Split by comma and extract each variant
+                        variant_parts = variants_str.split(",")
+                        for part in variant_parts:
+                            part = part.strip()
+                            if part:
+                                # Check if it has a score in parentheses
+                                if "(" in part and ")" in part:
+                                    # Extract the word before the parentheses
+                                    variant_name = part.split("(")[0].strip()
+                                else:
+                                    # It's just a plain word (like "resource" in eso entry)
+                                    variant_name = part.strip()
+
+                                if (
+                                    variant_name
+                                    and variant_name.lower() != keyword.lower()
+                                ):
+                                    variants.append(variant_name.lower())
+
                     # Store keyword with metadata for scoring importance
                     keywords[keyword] = {
                         "total_occurrences": int(row.get("total_occurrences", 0)),
                         "primary_occurrences": int(row.get("primary_occurrences", 0)),
                         "variant_count": int(row.get("variant_count", 0)),
+                        "variants": variants,  # Add extracted variants
                         "sources": row.get("sources", ""),
                         "notes": row.get("notes", ""),
                     }
 
             logger.info(
-                f"Loaded {len(keywords)} important keywords from {keywords_file}"
+                f"Loaded {len(keywords)} important keywords with variants from {keywords_file}"
             )
+
+            # Log some statistics about variants
+            total_variants = sum(
+                len(data.get("variants", [])) for data in keywords.values()
+            )
+            logger.info(f"Total variant mappings: {total_variants}")
+
             return keywords
 
         except Exception as e:
@@ -273,9 +354,10 @@ class SupervisedTrainingLoop:
         return enhanced_context
 
     def initialize_model(self):
-        """Initialize the model and tokenizer."""
-        logger.info(f"Loading model: {self.model_name}")
+        """Initialize the model(s) and tokenizer(s)."""
+        logger.info(f"Loading fine-tuning model: {self.model_name}")
 
+        # Initialize main tokenizer and model (for fine-tuning)
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_name, trust_remote_code=True, padding_side="left"
         )
@@ -283,22 +365,50 @@ class SupervisedTrainingLoop:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Configure model loading with optimized attention
+        # Configure model loading optimized for memory efficiency
         model_kwargs = {
             "torch_dtype": torch.float16,
-            "device_map": "auto",
+            "device_map": {"": 0},  # GPU 0
             "trust_remote_code": True,
-            "use_cache": True,  # Enable KV caching for inference speedup
-            "attn_implementation": "sdpa",  # Use PyTorch's optimized SDPA
+            "use_cache": True,
+            "attn_implementation": "sdpa",  # PyTorch SDPA
+            "low_cpu_mem_usage": True,
         }
 
         print(
             "⚡ Using PyTorch SDPA (Scaled Dot Product Attention) for optimized performance"
         )
+        print("🎯 Loading fine-tuning model on GPU")
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name, **model_kwargs
         )
+
+        # Initialize separate summary model if enabled
+        if (
+            self.use_separate_summary_model
+            and self.summary_model_name != self.model_name
+        ):
+            logger.info(f"Loading summary generation model: {self.summary_model_name}")
+            print("📝 Loading separate model for high-quality summary generation")
+
+            self.summary_tokenizer = AutoTokenizer.from_pretrained(
+                self.summary_model_name, trust_remote_code=True, padding_side="left"
+            )
+            if self.summary_tokenizer.pad_token is None:
+                self.summary_tokenizer.pad_token = self.summary_tokenizer.eos_token
+
+            # Load summary model on CPU initially to save GPU memory
+            summary_kwargs = model_kwargs.copy()
+            summary_kwargs["device_map"] = "cpu"  # Start on CPU
+
+            self.summary_model = AutoModelForCausalLM.from_pretrained(
+                self.summary_model_name, **summary_kwargs
+            )
+        else:
+            # Use the same model for both tasks
+            self.summary_tokenizer = self.tokenizer
+            self.summary_model = self.model
 
         # RTX 5070 Ti optimization: Compile model for faster training/inference
         try:
@@ -487,11 +597,10 @@ class SupervisedTrainingLoop:
             # Get module name from file path
             module_name = self.extract_module_name(file_path)
 
-            # Get file header
-            file_header = self.extract_file_header(content)
-
-            # Extract parameters from parsed result
-            parameters = parsed_result.get("parameters", [])
+            # Extract parameters and line number from the AST for this specific procedure
+            parameters, ast_line_number = self.extract_procedure_info_from_ast(
+                parsed_result, proc_name, is_function
+            )
 
             procedure_data = {
                 "name": proc_name,
@@ -501,10 +610,9 @@ class SupervisedTrainingLoop:
                 "business_code": business_code,
                 "file_path": str(file_path),
                 "module_name": module_name,
-                "file_header": file_header,
-                "line_number": start_line + 1,
+                "line_number": ast_line_number if ast_line_number else start_line + 1,
                 "parsed_info": parsed_result,
-                "context": f"Module: {module_name}\nFile: {file_path.name}\n{file_header[:200]}...",
+                "context": f"Module: {module_name}\nFile: {file_path.name}",
                 "type": "function" if is_function else "procedure",
             }
 
@@ -513,6 +621,79 @@ class SupervisedTrainingLoop:
         except Exception as e:
             logger.warning(f"Error extracting procedure info for {proc_name}: {e}")
             return None
+
+    def extract_procedure_info_from_ast(
+        self, parsed_result: dict, proc_name: str, is_function: bool = False
+    ) -> Tuple[List[str], Optional[int]]:
+        """Extract parameters and line number from the AST for a specific procedure/function using named fields."""
+        try:
+            # Get the raw AST tree from the parsed result
+            if "tree" not in parsed_result:
+                logger.debug(f"No AST tree found in parsed result for {proc_name}")
+                return [], None
+
+            tree = parsed_result["tree"]
+            root_node = tree.root_node
+
+            # Find the specific procedure/function node
+            procedure_node = self._find_procedure_node(
+                root_node, proc_name, is_function
+            )
+            if not procedure_node:
+                logger.debug(f"No AST node found for {proc_name}")
+                return [], None
+
+            # Extract line number from the AST node (1-based)
+            ast_line_number = procedure_node.start_point[0] + 1
+
+            # Use named fields to get parameters
+            parameter_nodes = procedure_node.children_by_field_name("parameters")
+            if not parameter_nodes:
+                return [], ast_line_number
+
+            # Extract parameter names from the parameter list
+            parameters_list = parameter_nodes[0]  # The parameter list node
+            param_names = []
+
+            for param_node in parameters_list.children:
+                if param_node.type == "parameter_declaration":
+                    # Use named field to get parameter name
+                    name_nodes = param_node.children_by_field_name("name")
+                    if name_nodes:
+                        param_name = name_nodes[0].text.decode("utf-8")
+                        param_names.append(param_name)
+
+            return param_names, ast_line_number
+
+        except Exception as e:
+            logger.warning(f"Error extracting AST info for {proc_name}: {e}")
+            return [], None
+
+    def _find_procedure_node(
+        self, root_node, proc_name: str, is_function: bool = False
+    ):
+        """Find the specific procedure/function node in the AST."""
+        target_type = "function_declaration" if is_function else "procedure_declaration"
+
+        def traverse_node(node):
+            # Check if this is the target procedure/function
+            if node.type == target_type:
+                # Use named field to get the name
+                name_nodes = node.children_by_field_name("name")
+                if name_nodes:
+                    node_name = name_nodes[0].text.decode("utf-8")
+                    if node_name.upper() == proc_name.upper():
+                        return node
+
+            # Recursively search children
+            for child in node.children:
+                result = traverse_node(child)
+                if result:
+                    return result
+
+            return None
+
+        return traverse_node(root_node)
 
     def extract_business_code_from_body(self, body: str) -> str:
         """Extract the core business logic from procedure body."""
@@ -625,12 +806,8 @@ IF order_status_ = 'ACTIVE' THEN
 END IF;""",
                 "file_path": "mock/customer_order_api.plsql",
                 "module_name": "orderprocessing",
-                "file_header": """-- IFS Cloud Customer Order API
--- Purpose: Handle customer order processing and validation
--- Created: 2024
--- Module: Order Processing""",
                 "line_number": 120,
-                "context": "Module: orderprocessing\nFile: customer_order_api.plsql\n-- IFS Cloud Customer Order API\n-- Purpose: Handle customer order processing...",
+                "context": "Module: orderprocessing\nFile: customer_order_api.plsql",
                 "type": "procedure",
             },
             {
@@ -681,12 +858,8 @@ END IF;
 validation_result_ := 'VALIDATION_OK';""",
                 "file_path": "mock/purchase_req_api.plsql",
                 "module_name": "purchasing",
-                "file_header": """-- IFS Cloud Purchase Requisition API
--- Purpose: Handle purchase requisition validation and processing
--- Created: 2024
--- Module: Purchasing""",
                 "line_number": 85,
-                "context": "Module: purchasing\nFile: purchase_req_api.plsql\n-- IFS Cloud Purchase Requisition API...",
+                "context": "Module: purchasing\nFile: purchase_req_api.plsql",
                 "type": "procedure",
             },
         ]
@@ -729,11 +902,8 @@ IF status_ = 'ACTIVE' THEN
 END IF;""",
                     "file_path": f"mock/{module}_api.plsql",
                     "module_name": module,
-                    "file_header": f"""-- IFS Cloud {module.title()} API
--- Purpose: Handle {module} operations
--- Module: {module.title()}""",
                     "line_number": 50 + i * 10,
-                    "context": f"Module: {module}\nFile: {module}_api.plsql\n-- IFS Cloud {module.title()} API...",
+                    "context": f"Module: {module}\nFile: {module}_api.plsql",
                     "type": "procedure",
                 }
             )
@@ -851,14 +1021,36 @@ END IF;""",
 
         insights = []
         found_keywords = {}
+        variant_matches = {}  # Track which variants were found
 
-        # Search for keywords in the text (case-insensitive)
-        text_lower = text.lower()
+        # Split text on underscores and other delimiters to get individual identifiers
+        import re
+
+        # Split on underscores, spaces, dots, commas, parentheses, etc.
+        identifiers = re.split(r"[_\s.,;()=<>!]+", text.lower())
+        identifiers = [id.strip() for id in identifiers if id.strip()]
 
         for keyword, metadata in self.important_keywords.items():
-            if keyword.lower() in text_lower:
-                total_count = metadata.get("total_occurrences", 0)
+            total_count = metadata.get("total_occurrences", 0)
+            found_variants = []
+
+            # Check for exact keyword match in identifiers
+            if keyword.lower() in identifiers:
                 found_keywords[keyword] = total_count
+                found_variants.append(keyword)
+
+            # Check for variant matches in identifiers
+            variants = metadata.get("variants", [])
+            for variant in variants:
+                if variant in identifiers:
+                    found_keywords[keyword] = (
+                        total_count  # Map variant back to main keyword
+                    )
+                    found_variants.append(variant)
+
+            # Track which variants were actually found
+            if found_variants:
+                variant_matches[keyword] = found_variants
 
         if found_keywords:
             # Sort by importance (total occurrences)
@@ -867,10 +1059,33 @@ END IF;""",
             )
             top_keywords = sorted_keywords[:3]  # Top 3 most important
 
-            keyword_list = [
-                f"{kw} ({count:,} occurrences)" for kw, count in top_keywords
-            ]
-            insights.append(f"**Key IFS Concepts Detected:** {', '.join(keyword_list)}")
+            keyword_details = []
+            for kw, count in top_keywords:
+                if kw in variant_matches:
+                    variants_found = variant_matches[kw]
+                    if (
+                        len(variants_found) == 1
+                        and variants_found[0].lower() == kw.lower()
+                    ):
+                        # Only exact match
+                        keyword_details.append(f"{kw} ({count:,} occurrences)")
+                    else:
+                        # Show which variants were found
+                        variant_list = [
+                            v for v in variants_found if v.lower() != kw.lower()
+                        ]
+                        if variant_list:
+                            keyword_details.append(
+                                f"{kw} via '{', '.join(variant_list)}' ({count:,} occurrences)"
+                            )
+                        else:
+                            keyword_details.append(f"{kw} ({count:,} occurrences)")
+                else:
+                    keyword_details.append(f"{kw} ({count:,} occurrences)")
+
+            insights.append(
+                f"**Key IFS Concepts Detected:** {', '.join(keyword_details)}"
+            )
 
             # Add high-importance guidance
             high_importance = [kw for kw, count in top_keywords if count > 10000]
@@ -882,9 +1097,110 @@ END IF;""",
         return "\n".join(insights) if insights else ""
 
     def run_training_loop(self):
-        """Main training loop."""
-        logger.info("Starting supervised training loop")
+        """Main two-phase training loop."""
+        logger.info("Starting two-phase supervised training loop")
 
+        if self.two_phase_training:
+            # Phase 1: Generate all summaries with large model
+            self.run_generation_phase()
+
+            # Phase 2: Fine-tune small model with multiple epochs
+            self.run_training_phase()
+        else:
+            # Legacy single-model approach
+            self.run_legacy_training_loop()
+
+    def run_generation_phase(self):
+        """Phase 1: Generate all target summaries using large model."""
+        print(f"\n🚀 Phase 1: Summary Generation")
+        print(f"📊 Target: {self.target_summaries} summaries")
+        print(f"🔧 Model: {self.summary_model_name}")
+
+        # Load large model for generation only
+        logger.info(f"Loading summary generation model: {self.summary_model_name}")
+        self.load_summary_model()
+
+        while len(self.all_summaries) < self.target_summaries:
+            # Get random batch
+            self.current_batch = self.get_random_batch()
+
+            if not self.current_batch:
+                logger.info("No more procedures to process")
+                break
+
+            # Generate summaries and prompts
+            remaining = self.target_summaries - len(self.all_summaries)
+            batch_size = min(self.batch_size, remaining)
+            logger.info(
+                f"Generating summaries for {batch_size} procedures ({len(self.all_summaries)}/{self.target_summaries} complete)"
+            )
+
+            for i, proc in enumerate(self.current_batch[:batch_size]):
+                proc["prompt"] = self.create_prompt(proc)
+                proc["generated_summary"] = self.generate_summary_for_procedure(proc)
+                proc["human_summary"] = proc[
+                    "generated_summary"
+                ]  # Initialize with generated
+                proc["status"] = "pending"
+
+            # Launch GUI for human review
+            self.current_batch = self.current_batch[
+                :batch_size
+            ]  # Only show what we generated
+            self.launch_review_gui()
+
+            # Collect accepted summaries
+            accepted = [
+                p for p in self.current_batch if p["status"] in ["accepted", "edited"]
+            ]
+            self.all_summaries.extend(accepted)
+
+            # Save progress immediately
+            self.save_training_state()
+
+            if len(accepted) == 0:
+                logger.info("No summaries accepted in this batch")
+                break
+
+            logger.info(
+                f"Phase 1 Progress: {len(self.all_summaries)}/{self.target_summaries} summaries"
+            )
+
+        # Unload large model to free memory
+        print(f"\n✅ Phase 1 Complete: {len(self.all_summaries)} summaries generated")
+        print("🧹 Unloading generation model to free memory...")
+        self.unload_summary_model()
+        self.generation_phase_complete = True
+
+    def run_training_phase(self):
+        """Phase 2: Fine-tune small model with multiple epochs + augmentation."""
+        if len(self.all_summaries) < 10:
+            print(
+                f"❌ Need at least 10 summaries for training, got {len(self.all_summaries)}"
+            )
+            return
+
+        print(f"\n🚀 Phase 2: Model Fine-tuning")
+        print(f"📊 Training Data: {len(self.all_summaries)} summaries")
+        print(f"🔧 Model: {self.training_model_name}")
+        print(f"🔄 Epochs: {self.training_epochs}")
+        print(f"🎲 Data Augmentation: {self.data_augmentation}")
+
+        # Load small model for training
+        logger.info(f"Loading fine-tuning model: {self.training_model_name}")
+        self.model_name = self.training_model_name  # Set for load_model method
+        self.load_model()
+
+        # Fine-tune with multiple epochs and augmentation
+        success = self.fine_tune_model_enhanced()
+
+        if success:
+            print("✅ Training phase completed successfully!")
+        else:
+            print("❌ Training phase failed")
+
+    def run_legacy_training_loop(self):
+        """Legacy single-model training loop for backward compatibility."""
         while True:
             # Get random batch
             self.current_batch = self.get_random_batch()
@@ -896,14 +1212,10 @@ END IF;""",
             # Generate initial summaries and prompts
             logger.info(f"Generating summaries for batch {self.current_iteration + 1}")
             for proc in self.current_batch:
-                proc["prompt"] = self.create_prompt(
-                    proc
-                )  # Pre-generate and store prompt
+                proc["prompt"] = self.create_prompt(proc)
                 proc["generated_summary"] = self.generate_summary_for_procedure(proc)
-                proc["human_summary"] = proc[
-                    "generated_summary"
-                ]  # Initialize with generated
-                proc["status"] = "pending"  # pending, accepted, edited, skipped
+                proc["human_summary"] = proc["generated_summary"]
+                proc["status"] = "pending"
 
             # Launch GUI for human review
             self.launch_review_gui()
@@ -924,7 +1236,7 @@ END IF;""",
 
             # Fine-tune model
             should_continue_training = True
-            if len(self.all_summaries) >= 5:  # Need minimum for training
+            if len(self.all_summaries) >= 5:
                 should_continue_training = self.fine_tune_model()
 
                 if not should_continue_training:
@@ -959,6 +1271,239 @@ END IF;""",
                 break
 
         logger.info("Training loop completed")
+
+    def load_summary_model(self):
+        """Load large model for summary generation."""
+        logger.info(f"Loading summary model: {self.summary_model_name}")
+
+        self.summary_tokenizer = AutoTokenizer.from_pretrained(self.summary_model_name)
+        if self.summary_tokenizer.pad_token is None:
+            self.summary_tokenizer.pad_token = self.summary_tokenizer.eos_token
+
+        self.summary_model = AutoModelForCausalLM.from_pretrained(
+            self.summary_model_name,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation="sdpa",  # Use PyTorch SDPA
+            low_cpu_mem_usage=True,
+        )
+
+        # Compile for better performance
+        print("🚀 Compiling summary model...")
+        self.summary_model = torch.compile(self.summary_model, backend="inductor")
+        print("✅ Summary model ready")
+
+    def unload_summary_model(self):
+        """Unload summary model to free memory."""
+        if hasattr(self, "summary_model") and self.summary_model is not None:
+            del self.summary_model
+        if hasattr(self, "summary_tokenizer") and self.summary_tokenizer is not None:
+            del self.summary_tokenizer
+
+        self.summary_model = None
+        self.summary_tokenizer = None
+
+        # Force garbage collection and clear CUDA cache
+        import gc
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        print("✅ Summary model unloaded, memory freed")
+
+    def fine_tune_model_enhanced(self):
+        """Enhanced fine-tuning with multiple epochs and data augmentation."""
+        try:
+            print(f"\n🎯 Enhanced Fine-tuning with {self.training_epochs} epochs")
+
+            # Prepare training data with augmentation
+            train_data = self.prepare_enhanced_training_data()
+
+            if len(train_data) < 5:
+                logger.warning(f"Insufficient training data: {len(train_data)} samples")
+                return False
+
+            print(f"📊 Training samples (with augmentation): {len(train_data)}")
+
+            # Setup model for training
+            self.setup_peft_model()
+
+            # Train with multiple epochs
+            for epoch in range(self.training_epochs):
+                print(f"\n📈 Epoch {epoch + 1}/{self.training_epochs}")
+
+                # Shuffle data each epoch
+                random.shuffle(train_data)
+
+                # Train on this epoch's data
+                epoch_success = self.train_single_epoch(train_data, epoch)
+                if not epoch_success:
+                    logger.error(f"Training failed at epoch {epoch + 1}")
+                    return False
+
+                # Save checkpoint after each epoch
+                checkpoint_path = self.save_dir / f"checkpoint_epoch_{epoch + 1}.pt"
+                self.save_checkpoint(checkpoint_path)
+                print(f"💾 Checkpoint saved: {checkpoint_path}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Enhanced fine-tuning failed: {e}")
+            return False
+
+    def prepare_enhanced_training_data(self):
+        """Prepare training data with augmentation strategies."""
+        base_data = []
+
+        for summary in self.all_summaries:
+            prompt = summary.get("prompt", "")
+            human_summary = summary.get("human_summary", "")
+
+            if prompt and human_summary:
+                base_data.append({"prompt": prompt, "response": human_summary})
+
+        if not self.data_augmentation:
+            return base_data
+
+        # Data augmentation strategies
+        augmented_data = base_data.copy()
+
+        # 1. Parameter variation (randomize parameter order/names)
+        for item in base_data[:20]:  # Limit augmentation
+            augmented_item = self.augment_with_parameter_variation(item)
+            if augmented_item:
+                augmented_data.append(augmented_item)
+
+        # 2. Paraphrasing (slight prompt variations)
+        for item in base_data[:15]:
+            augmented_item = self.augment_with_paraphrasing(item)
+            if augmented_item:
+                augmented_data.append(augmented_item)
+
+        print(f"🎲 Data augmentation: {len(base_data)} → {len(augmented_data)} samples")
+        return augmented_data
+
+    def augment_with_parameter_variation(self, item):
+        """Create variation by changing parameter representation."""
+        try:
+            prompt = item["prompt"]
+            # Simple parameter shuffling/formatting changes
+            if "Parameters:" in prompt:
+                # This is a simple example - could be more sophisticated
+                augmented_prompt = prompt.replace(
+                    "Parameters:", "Procedure Parameters:"
+                )
+                return {"prompt": augmented_prompt, "response": item["response"]}
+        except:
+            pass
+        return None
+
+    def augment_with_paraphrasing(self, item):
+        """Create variation with slight prompt paraphrasing."""
+        try:
+            prompt = item["prompt"]
+            # Simple paraphrasing examples
+            paraphrases = [
+                ("Analyze this IFS Cloud procedure", "Review this IFS Cloud procedure"),
+                (
+                    "provide a concise business summary",
+                    "create a brief business summary",
+                ),
+                ("Module:", "IFS Module:"),
+            ]
+
+            augmented_prompt = prompt
+            for old, new in paraphrases:
+                if old in augmented_prompt:
+                    augmented_prompt = augmented_prompt.replace(old, new, 1)
+                    break
+
+            if augmented_prompt != prompt:
+                return {"prompt": augmented_prompt, "response": item["response"]}
+        except:
+            pass
+        return None
+
+    def train_single_epoch(self, train_data, epoch_num):
+        """Train model for a single epoch."""
+        try:
+            print(f"🔄 Training epoch {epoch_num + 1} with {len(train_data)} samples")
+
+            # Create data loader
+            dataset = self.create_training_dataset(train_data)
+            dataloader = DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle=True,
+                collate_fn=self.collate_fn,
+            )
+
+            # Training metrics
+            total_loss = 0
+            num_batches = 0
+
+            # Training loop
+            for batch_idx, batch in enumerate(dataloader):
+                try:
+                    input_ids = batch["input_ids"].to(self.device)
+                    attention_mask = batch["attention_mask"].to(self.device)
+                    labels = batch["labels"].to(self.device)
+
+                    # Forward pass
+                    outputs = self.model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                    )
+
+                    loss = outputs.loss
+                    total_loss += loss.item()
+                    num_batches += 1
+
+                    # Backward pass
+                    loss.backward()
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+
+                    if batch_idx % 5 == 0:  # Log every 5 batches
+                        print(
+                            f"  Batch {batch_idx + 1}/{len(dataloader)}, Loss: {loss.item():.4f}"
+                        )
+
+                except Exception as e:
+                    logger.error(f"Batch {batch_idx} failed: {e}")
+                    continue
+
+            avg_loss = total_loss / num_batches if num_batches > 0 else float("inf")
+            print(f"✅ Epoch {epoch_num + 1} completed. Average loss: {avg_loss:.4f}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Single epoch training failed: {e}")
+            return False
+
+    def save_checkpoint(self, checkpoint_path):
+        """Save model checkpoint."""
+        try:
+            checkpoint = {
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "epoch": getattr(self, "current_epoch", 0),
+                "training_config": {
+                    "learning_rate": self.learning_rate,
+                    "batch_size": self.batch_size,
+                    "training_epochs": self.training_epochs,
+                },
+            }
+            torch.save(checkpoint, checkpoint_path)
+            print(f"💾 Checkpoint saved to {checkpoint_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+            return False
 
     def get_random_batch(self) -> List[Dict]:
         """Get a random batch of procedures with module prioritization."""
@@ -1121,7 +1666,10 @@ END IF;""",
         # Tokenize dataset
         def tokenize_function(examples):
             return self.tokenizer(
-                examples["text"], truncation=True, padding=True, max_length=1024
+                examples["text"],
+                truncation=True,
+                padding=True,
+                max_length=self.max_length,
             )
 
         tokenized_dataset = dataset.map(tokenize_function, batched=True)
@@ -1448,7 +1996,7 @@ class SummaryReviewGUI:
         instructions = """Ctrl+Enter → Accept current summary
 Ctrl+S → Skip this procedure
 Ctrl+E → Focus summary editor
-Ctrl+← / Ctrl+→ → Navigate procedures
+Ctrl+, / Ctrl+. → Navigate procedures
 Ctrl+Q → Save and continue
 Escape → Unfocus editor (move focus away)
 
@@ -1513,7 +2061,7 @@ the summary as needed. All changes are auto-saved."""
 
         self.prev_btn = tk.Button(
             button_frame,
-            text="← Previous (Ctrl+←)",
+            text="← Previous (Ctrl+,)",
             command=self.previous_procedure,
             bg=bg_light,
             fg=text_primary,
@@ -1523,7 +2071,7 @@ the summary as needed. All changes are auto-saved."""
 
         self.next_btn = tk.Button(
             button_frame,
-            text="Next → (Ctrl+→)",
+            text="Next → (Ctrl+.)",
             command=self.next_procedure,
             bg=accent_blue,
             fg="white",
@@ -1554,8 +2102,8 @@ the summary as needed. All changes are auto-saved."""
         self.root.bind_all("<Control-Return>", lambda e: self.accept_summary())
         self.root.bind_all("<Control-s>", lambda e: self.skip_summary())
         self.root.bind_all("<Control-e>", lambda e: self.focus_summary_editor())
-        self.root.bind_all("<Control-Left>", lambda e: self.previous_procedure())
-        self.root.bind_all("<Control-Right>", lambda e: self.next_procedure())
+        self.root.bind_all("<Control-comma>", lambda e: self.previous_procedure())
+        self.root.bind_all("<Control-period>", lambda e: self.next_procedure())
         self.root.bind_all("<Control-q>", lambda e: self.save_and_continue())
 
         # Escape should just remove focus from editor, not exit
@@ -1640,10 +2188,7 @@ the summary as needed. All changes are auto-saved."""
 📍 LINE: {proc.get('line_number', '?')}
 🔄 STATUS: {status.upper()}
 
-📋 FILE HEADER:
-{proc.get('file_header', '(no header)')}
-
-💻 BUSINESS CODE:
+ BUSINESS CODE:
 {proc.get('business_code', proc.get('body', '')[:500] + '...' if len(proc.get('body', '')) > 500 else proc.get('body', ''))}
 """
 
@@ -1727,6 +2272,16 @@ the summary as needed. All changes are auto-saved."""
             proc["status"] = "accepted"
 
         proc["human_summary"] = current_summary
+
+        # Add to all_summaries immediately when accepted
+        if proc not in self.all_summaries:
+            self.all_summaries.append(proc)
+
+        # Save training state immediately to persist the accepted summary
+        self.save_training_state()
+        logger.info(
+            f"Accepted summary for '{proc['name']}' - total accepted: {len(self.all_summaries)}"
+        )
 
         self.next_procedure()
 

@@ -1315,7 +1315,7 @@ requires-dist = [
     { name = "faiss-cpu", specifier = ">=1.12.0" },
     { name = "fastmcp", specifier = ">=2.11.3" },
     { name = "flashrank", specifier = ">=0.2.9" },
-    { name = "ifs-cloud-parser", specifier = ">=0.3.0" },
+    { name = "ifs-cloud-parser", specifier = ">=0.4.0" },
     { name = "matplotlib", specifier = ">=3.10.5" },
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -1345,12 +1345,12 @@ provides-extras = ["dev", "gpu129", "gpu128", "gpu126", "cpu"]
 
 [[package]]
 name = "ifs-cloud-parser"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tree-sitter" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/76/c1/c27bbd0b619d373e9aeae03bbbc223c0a18dc50b4482306311f9401a9eff/ifs_cloud_parser-0.3.0.tar.gz", hash = "sha256:7d8f3f3519c99fe600d77465fce800af7b10a40e43d91bf54a16eb9b5a1812bb", size = 143135, upload-time = "2025-08-24T19:09:16.408Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/7f/868570edd9fb4f6d7dbc734ea25812cd452c394bdf0a0f87883e9b4a4fe3/ifs_cloud_parser-0.4.0.tar.gz", hash = "sha256:ceda5a95326f2f07e605b95e8880362dfeb47275e5238084961870e586de4f6e", size = 159029, upload-time = "2025-08-25T12:29:47.881Z" }
 
 [[package]]
 name = "iniconfig"

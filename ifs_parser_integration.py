@@ -48,6 +48,7 @@ class IFSCloudParserIntegration:
 
             return {
                 "method": "tree-sitter",
+                "tree": tree,  # Include the raw tree for named field access
                 "root_type": root.type,
                 "child_count": root.child_count,
                 "has_error": root.has_error,
