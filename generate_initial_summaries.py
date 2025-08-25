@@ -12,7 +12,7 @@ import random
 from pathlib import Path
 from collections import defaultdict, Counter
 import torch
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 import numpy as np
 
 
@@ -24,15 +24,44 @@ class ProcedureSummaryGenerator:
         self.procedures = []
         self.summaries = []
 
-        # Initialize tokenizer and model
+        # Initialize tokenizer and model for code generation
         print("🤖 Initializing AI model...")
-        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
-        self.model = AutoModel.from_pretrained("microsoft/codebert-base")
+        model_name = "Qwen/Qwen2.5-Coder-7B-Instruct"
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=True, padding_side="left"
+        )
+
+        # Load model with optimal settings for 16GB VRAM
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                torch_dtype=torch.float16,  # Use fp16 for memory efficiency
+                device_map="auto",  # Auto-distribute across GPU
+                low_cpu_mem_usage=True,
+                # Skip flash attention on Windows to avoid compatibility issues
+            )
+        except Exception as e:
+            print(f"⚠️  Flash attention not available, using standard attention: {e}")
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                low_cpu_mem_usage=True,
+            )
 
         # Move to GPU if available
         if torch.cuda.is_available():
-            self.model = self.model.cuda()
+            if not hasattr(self.model, "device") or self.model.device.type != "cuda":
+                self.model = self.model.cuda()
             print(f"🚀 Using GPU: {torch.cuda.get_device_name()}")
+            print(f"💾 VRAM Usage: ~{self.estimate_vram_usage():.1f}GB")
+
+        # Set pad token if not set
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # PL/SQL patterns for AST-like analysis
         self.plsql_patterns = {
@@ -56,6 +85,17 @@ class ProcedureSummaryGenerator:
             "updates": re.compile(r"\bUPDATE\b", re.IGNORECASE),
             "deletes": re.compile(r"\bDELETE\b", re.IGNORECASE),
         }
+
+    def estimate_vram_usage(self):
+        """Estimate VRAM usage for the loaded model."""
+        try:
+            if hasattr(self.model, "get_memory_footprint"):
+                return self.model.get_memory_footprint() / (1024**3)  # Convert to GB
+            else:
+                # Estimate based on model parameters (7B model ~14GB in fp16)
+                return 14.0
+        except:
+            return 14.0  # Conservative estimate for 7B model
 
     def load_keywords(self):
         """Load curated keywords from CSV."""
@@ -231,6 +271,215 @@ class ProcedureSummaryGenerator:
             summary_parts.append(f"performs {', '.join(operations)}")
 
         return " ".join(summary_parts) + "."
+
+    def extract_business_relevant_code(self, code):
+        """Extract only business-relevant parts: procedure name, parameter names, and body logic with prioritized control structures."""
+        lines = code.split("\n")
+
+        # Find procedure/function declaration line
+        proc_name = "Unknown"
+        param_names = []
+
+        for i, line in enumerate(lines):
+            line_clean = line.strip()
+            if line_clean.upper().startswith(("PROCEDURE", "FUNCTION")):
+                # Extract procedure name
+                match = re.search(
+                    r"(?:PROCEDURE|FUNCTION)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                    line_clean,
+                    re.IGNORECASE,
+                )
+                if match:
+                    proc_name = match.group(1)
+
+                # Extract parameter names (skip types, just get meaningful names)
+                # Look for parameters in current and next few lines until we hit 'IS' or 'AS'
+                param_section = ""
+                j = i
+                while j < len(lines) and j < i + 10:  # Look ahead max 10 lines
+                    param_section += lines[j] + " "
+                    if re.search(r"\b(IS|AS)\b", lines[j], re.IGNORECASE):
+                        break
+                    j += 1
+
+                # Extract parameter names (avoid SQL keywords, types, and common CRUD parameters)
+                param_matches = re.findall(
+                    r"\b([a-z_][a-z0-9_]*)\s*_?\s*(?:IN|OUT|IN\s+OUT)?\s+(?:VARCHAR2|NUMBER|DATE|BOOLEAN|TIMESTAMP)\b",
+                    param_section,
+                    re.IGNORECASE,
+                )
+                # Filter out common IFS CRUD parameters that are just noise
+                crud_params = {
+                    "info",
+                    "objid",
+                    "objversion",
+                    "attr",
+                    "action",
+                    "in",
+                    "out",
+                    "is",
+                    "as",
+                    "begin",
+                    "end",
+                }
+                param_names = [
+                    p.replace("_", "")
+                    for p in param_matches
+                    if len(p) > 2 and p.lower() not in crud_params
+                ]
+                break
+
+        # Find the actual business logic (after IS/AS, before END)
+        body_start = -1
+        body_end = -1
+
+        for i, line in enumerate(lines):
+            if body_start == -1 and re.search(
+                r"\b(IS|AS)\s*$", line.strip(), re.IGNORECASE
+            ):
+                body_start = i + 1
+            elif body_start != -1 and re.match(
+                r"^END\s*[A-Za-z_]*\s*;?\s*$", line.strip(), re.IGNORECASE
+            ):
+                body_end = i
+                break
+
+        # Extract and prioritize business logic body
+        if body_start != -1:
+            if body_end == -1:
+                body_end = len(lines)
+            body_lines = lines[body_start:body_end]
+
+            # Prioritize control structures and important business logic
+            prioritized_logic = self.prioritize_control_structures(body_lines)
+        else:
+            prioritized_logic = code[:2000]  # Fallback to original if parsing fails
+
+        # Create business-focused summary
+        business_code = f"Procedure: {proc_name}\n"
+        if param_names:
+            business_code += (
+                f"Processing: {', '.join(param_names[:5])}\n"  # Max 5 params
+            )
+        business_code += f"Logic:\n{prioritized_logic}"
+
+        return business_code
+
+    def prioritize_control_structures(self, body_lines):
+        """Prioritize control structures and key business logic in code body."""
+        # Remove empty lines and pure comments
+        meaningful_lines = []
+        for line in body_lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("--"):
+                meaningful_lines.append(line)
+
+        # If short enough, return as-is
+        if len("\n".join(meaningful_lines)) <= 2000:
+            return "\n".join(meaningful_lines)
+
+        # Categorize lines by importance
+        priority_lines = []
+        context_lines = []
+
+        for i, line in enumerate(meaningful_lines):
+            line_upper = line.upper()
+            is_priority = (
+                # Control structures
+                any(
+                    pattern in line_upper
+                    for pattern in ["IF ", "ELSIF", "ELSE", "END IF"]
+                )
+                or any(
+                    pattern in line_upper
+                    for pattern in ["FOR ", "WHILE ", "LOOP", "END LOOP"]
+                )
+                or
+                # Exception handling
+                "EXCEPTION" in line_upper
+                or "RAISE" in line_upper
+                or
+                # API calls (business integration)
+                "_API." in line
+                or
+                # SQL operations (data manipulation)
+                any(
+                    pattern in line_upper
+                    for pattern in ["SELECT", "INSERT", "UPDATE", "DELETE", "CURSOR"]
+                )
+                or
+                # Variable assignments with business meaning
+                ":=" in line
+                and any(
+                    keyword in line_upper
+                    for keyword in ["_ID", "_NO", "_CODE", "_STATUS", "_STATE", "_TYPE"]
+                )
+            )
+
+            if is_priority:
+                priority_lines.append((i, line))
+            else:
+                context_lines.append((i, line))
+
+        # Build result with priority lines and selective context
+        result_lines = []
+        char_count = 0
+        max_chars = 2000
+
+        # Always include priority lines
+        last_included_idx = -1
+        for idx, line in priority_lines:
+            if char_count + len(line) + 1 > max_chars:
+                break
+
+            # Add context gap marker if there's a significant gap
+            if last_included_idx != -1 and idx - last_included_idx > 3:
+                result_lines.append("   ...")
+                char_count += 8
+
+            result_lines.append(line)
+            char_count += len(line) + 1
+            last_included_idx = idx
+
+        # Fill remaining space with context lines near priority lines
+        remaining_chars = max_chars - char_count
+        if remaining_chars > 100:  # Only if we have meaningful space left
+            context_added = 0
+            for idx, line in context_lines:
+                if (
+                    char_count + len(line) + 1 > max_chars or context_added > 5
+                ):  # Limit context lines
+                    break
+
+                # Only add context lines that are near priority lines
+                near_priority = any(
+                    abs(idx - p_idx) <= 2 for p_idx, _ in priority_lines
+                )
+                if near_priority:
+                    result_lines.append(line)
+                    char_count += len(line) + 1
+                    context_added += 1
+
+        # Sort by original line position to maintain flow
+        result_with_positions = []
+        for line in result_lines:
+            if line == "   ...":
+                result_with_positions.append((999999, line))  # Sort gaps to end
+                continue
+            # Find original position
+            for idx, orig_line in enumerate(meaningful_lines):
+                if orig_line == line:
+                    result_with_positions.append((idx, line))
+                    break
+
+        result_with_positions.sort()
+        final_result = "\n".join(line for _, line in result_with_positions)
+
+        # Add final truncation marker if we hit the limit
+        if char_count >= max_chars:
+            final_result += "\n   ..."
+
+        return final_result
 
     def extract_procedures_from_file(self, file_path):
         """Extract individual procedures/functions from a file."""
@@ -453,41 +702,150 @@ class ProcedureSummaryGenerator:
         # Prepare context for AI model
         keyword_context = ", ".join([k["keyword"] for k in keywords[:5]])
 
-        # Create enhanced prompt
+        # Extract business-relevant parts of the code (maximize space for code)
+        business_code = self.extract_business_relevant_code(code)
+
         prompt = f"""
-        Analyze this IFS Cloud PL/SQL procedure:
+        IFS Cloud business procedure analysis. Focus on business value and operational impact.
         
         Context: {context}
-        Key business terms: {keyword_context}
+        Keywords: {keyword_context}
         Complexity: {complexity['level']} ({complexity['score']:.1f})
         
-        Code snippet:
-        {code[:1000]}...
+        {business_code}
         
-        Generate a concise business summary focusing on:
-        1. What business process it supports
-        2. Key operations performed
-        3. Main data entities involved
+        Write a business-focused summary explaining what business problem this solves and its operational value.
+        Use natural business language for functional consultants.
         """
 
         try:
-            # Tokenize and get embeddings
-            inputs = self.tokenizer(
-                prompt, return_tensors="pt", max_length=512, truncation=True
+            # Format as chat messages for Qwen2.5-Coder
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are an expert IFS Cloud business analyst. Create concise, business-focused summaries of PL/SQL procedures. Respond with only the summary text, no headers or markdown.",
+                },
+                {
+                    "role": "user",
+                    "content": f"""Analyze this IFS Cloud procedure and write a concise business summary (1-2 sentences):
+
+Context: {context}
+Keywords: {keyword_context}
+Complexity: {complexity['level']} ({complexity['score']:.1f})
+
+{business_code}
+
+Write ONLY a plain text business summary that explains what business problem this solves. Start with an action verb like "Validates", "Calculates", "Updates", or "Processes".""",
+                },
+            ]
+
+            # Apply chat template
+            formatted_prompt = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
             )
+
+            # Tokenize for generation (use larger context window)
+            inputs = self.tokenizer(
+                formatted_prompt,
+                return_tensors="pt",
+                max_length=4096,  # Use larger context for Qwen2.5-Coder
+                truncation=True,
+                padding=True,
+            )
+
             if torch.cuda.is_available():
                 inputs = {k: v.cuda() for k, v in inputs.items()}
 
+            # Generate summary using the model
             with torch.no_grad():
-                outputs = self.model(**inputs)
+                generation_config = GenerationConfig(
+                    max_new_tokens=80,  # Shorter output for concise summaries
+                    temperature=0.2,  # Lower temperature for more focused output
+                    top_p=0.8,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    repetition_penalty=1.1,  # Prevent repetition
+                )
 
-            # For now, use the context summary as base and enhance it
-            # In a full implementation, this would use a proper generation model
-            enhanced_summary = self.enhance_context_summary(
-                context, keywords, complexity
-            )
+                outputs = self.model.generate(
+                    **inputs, generation_config=generation_config, use_cache=True
+                )
 
-            return enhanced_summary
+                # Decode the generated text
+                generated_text = self.tokenizer.decode(
+                    outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
+                ).strip()
+
+                # Clean up the generated summary
+                if generated_text:
+                    # Remove markdown headers, formatting, and other artifacts
+                    cleaned_text = (
+                        generated_text.replace("###", "")
+                        .replace("##", "")
+                        .replace("#", "")
+                    )
+                    cleaned_text = cleaned_text.replace("**", "").replace("*", "")
+                    cleaned_text = cleaned_text.strip()
+
+                    # Split by lines and take the first substantial sentence
+                    lines = [
+                        line.strip()
+                        for line in cleaned_text.split("\n")
+                        if line.strip()
+                    ]
+                    if lines:
+                        # Find the first line that looks like a proper business summary
+                        for line in lines:
+                            if (
+                                len(line) > 20
+                                and any(
+                                    line.startswith(verb)
+                                    for verb in [
+                                        "Validates",
+                                        "Calculates",
+                                        "Updates",
+                                        "Processes",
+                                        "Manages",
+                                        "Handles",
+                                        "Creates",
+                                        "Retrieves",
+                                        "Deletes",
+                                        "Modifies",
+                                        "Controls",
+                                        "Executes",
+                                        "Performs",
+                                        "Checks",
+                                        "Ensures",
+                                    ]
+                                )
+                                or any(
+                                    word in line.lower()
+                                    for word in [
+                                        "business",
+                                        "process",
+                                        "data",
+                                        "system",
+                                        "order",
+                                        "customer",
+                                        "financial",
+                                    ]
+                                )
+                            ):
+                                enhanced_summary = line
+                                # Ensure reasonable length
+                                if len(enhanced_summary) > 250:
+                                    enhanced_summary = enhanced_summary[:250] + "..."
+                                return enhanced_summary
+
+                        # If no perfect match, take the first substantial line
+                        enhanced_summary = lines[0]
+                        if len(enhanced_summary) > 250:
+                            enhanced_summary = enhanced_summary[:250] + "..."
+                        return enhanced_summary
+
+            # Fallback to context summary if generation fails
+            return self.enhance_context_summary(context, keywords, complexity)
 
         except Exception as e:
             print(f"Warning: AI enhancement failed, using context summary: {e}")
@@ -539,6 +897,9 @@ class ProcedureSummaryGenerator:
             # Generate enhanced summary
             enhanced_summary = self.generate_enhanced_summary(proc)
 
+            # Extract business-relevant code for display
+            business_code = self.extract_business_relevant_code(proc["code"])
+
             evaluation_data.append(
                 {
                     "id": i,
@@ -554,9 +915,9 @@ class ProcedureSummaryGenerator:
                     "context_summary": proc["context"],
                     "enhanced_summary": enhanced_summary,
                     "code_snippet": (
-                        proc["code"][:500] + "..."
-                        if len(proc["code"]) > 500
-                        else proc["code"]
+                        business_code[:800] + "..."
+                        if len(business_code) > 800
+                        else business_code
                     ),
                     "manual_rating": "",
                     "manual_corrected_summary": "",
