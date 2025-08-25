@@ -1,0 +1,141 @@
+id,module,file_path,complexity_level,complexity_score,char_length,keyword_count,top_keywords,context_summary,enhanced_summary,code_snippet,manual_rating,manual_corrected_summary,notes
+1,accrul,C:\repos\_ifs\25.1.0\accrul\source\accrul\database\CostStructureItem.plsql,simple,3.9,588,10,"sor, rso, comp, com, struc",Function 'Get_Level_No__' (simple complexity) with 3 parameters handles comp performs data operations.,Function 'Get_Level_No__' (simple complexity) with 3 parameters handles comp performs data operations.,"FUNCTION Get_Level_No__ (
+   company_           IN VARCHAR2,
+   cost_structure_id_ IN VARCHAR2,
+   name_value_        IN VARCHAR2 ) RETURN NUMBER
+IS
+   level_no_ NUMBER;
+   CURSOR getlevel IS
+      SELECT level_no
+      FROM   cost_structure_item
+      WHERE  company                       = company_
+      AND    cost_structure_id             = cost_structure_id_
+      AND    name_value                    = name_value_
+      AND    cost_struct_item_type_db = 'NODE';
+BEGIN
+   OPEN  getlevel;
+   FE...",,,
+2,adcom,C:\repos\_ifs\25.1.0\adcom\source\adcom\database\AvExeTask.plsql,medium,25.3,1721,20,"curr, work, inwork, works, ord","Procedure 'Start__' (medium complexity) with 5 parameters handles curr, work, ord performs API integration, business logic.","Procedure 'Start__' (medium complexity) with 5 parameters handles curr, work, ord performs API integration, business logic. Heavy API integration for cross-module communication.","PROCEDURE Start__ (
+   info_       OUT    VARCHAR2,
+   objid_      IN     VARCHAR2,
+   objversion_ IN OUT VARCHAR2,
+   attr_       IN OUT VARCHAR2,
+   action_     IN     VARCHAR2 )
+IS
+   rowid_               VARCHAR2(200);
+   wp_id_               NUMBER;
+   wp_state_            av_aircraft_work_package_tab.rowstate%TYPE;
+   task_state_          av_exe_task.objstate%TYPE;
+   task_rec_            work_task_tab%ROWTYPE;
+   is_wp_available_     BOOLEAN;
+   current_wp_location_ VARCHAR2(50);
+   
+BEGI...",,,
+3,admon,C:\repos\_ifs\25.1.0\admon\source\admon\database\AdmonCommunicationLog.plsql,simple,9.8,2010,20,"job, comp, compl, incomp, ord","Function 'for' (simple complexity) with 1 parameter handles job, comp, ord.","Function 'for' (simple complexity) with 1 parameter handles job, comp, ord.","function for read,substring and append text to long message. 
+--  211222  SatGlk  AD-4485, Modified Generate_Comm_Log_Entry___ to accept logging the data sync events which has a dynamic uri
+--  210618  harulk  AD-2202, Created. Override Insert___ and Check_Common___ methods. Added Generate_Log_Seq___, Generate_Comm_Log_Entry___, Format_Message_Properties, Log_Error, Log_Info and Log_Trace methods.
+--                  Added record type Message_Property_Rec and created Message_Property_Arr from th...",,,
+4,amfw,C:\repos\_ifs\25.1.0\amfw\source\amfw\database\AmParqAnaModel.plsql,simple,0.9,233,7,"model, del, anal, pro, analys",Procedure 'Delete_Analysis_Model___' (simple complexity) with 1 parameter.,Procedure 'Delete_Analysis_Model___' (simple complexity) with 1 parameter.,"PROCEDURE Delete_Analysis_Model___(   
+   id_ IN VARCHAR2)
+IS
+   rec_ am_parq_ana_model_tab%ROWTYPE;
+BEGIN
+   rec_ := Get_Object_By_Keys___(id_);
+   rec_.mark_for_deletion := 1;   
+   Modify___(rec_);   
+END Delete_Analysis_Model___;",,,
+5,apppay,C:\repos\_ifs\25.1.0\apppay\source\apppay\database\AfpItem.plsql,medium,27.7,1338,20,"sor, rso, pay, paym, payment","Function 'Get_Mult_Proj_Contracts' (medium complexity) with 1 parameter handles pay, payment performs data operations, business logic.","Function 'Get_Mult_Proj_Contracts' (medium complexity) with 1 parameter handles pay, payment performs data operations, business logic. Supports financial processing business domain.","FUNCTION Get_Mult_Proj_Contracts (
+   project_id_ IN VARCHAR2 ) RETURN VARCHAR2
+IS
+   temp_          NUMBER;
+   contract_nos_  VARCHAR2(32000) := '';
+   CURSOR get_contract IS
+      SELECT afp_no, contract_no
+      FROM   afp_item_tab
+      WHERE  project_id  = project_id_
+      GROUP BY afp_no, contract_no;
+   CURSOR get_mult_proj (t_contract_no_ VARCHAR2, t_afp_no_ IN NUMBER) IS
+      SELECT 1
+      FROM   afp_item_tab
+      WHERE  afp_no      = t_afp_no_
+      AND    contract_no = t_contract_...",,,
+6,appsrv,C:\repos\_ifs\25.1.0\appsrv\source\appsrv\database\MapPosition.plsql,simple,9.8,1204,20,"conn, statement, sal, ins, inter",Procedure 'Validate_Modify_Map_Pos___' (simple complexity) with 2 parameters.,Procedure 'Validate_Modify_Map_Pos___' (simple complexity) with 2 parameters.,"PROCEDURE Validate_Modify_Map_Pos___(
+   oldrec_    IN  map_position_tab%ROWTYPE,
+   newrec_    IN  map_position_tab%ROWTYPE)
+IS
+   package_name_    VARCHAR2(30);
+   stmt_            VARCHAR2(2000);
+   old_attr_        VARCHAR2(32000);
+   new_attr_        VARCHAR2(32000);
+BEGIN
+   package_name_ := Object_Connection_SYS.Get_Package_Name(newrec_.lu_name);
+   old_attr_ := Pack___(oldrec_);
+   Client_SYS.Set_Item_Value('ROWKEY', oldrec_.rowkey, old_attr_);
+   new_attr_ := Pack___(newrec_);
+   Client...",,,
+7,asdtcl,C:\repos\_ifs\25.1.0\asdtcl\source\asdtcl\database\AssetObservationConfig.plsql,simple,1.8,557,9,"vat, sup, ins, serv, pro",Procedure 'Insert___' (simple complexity) with 4 parameters.,Procedure 'Insert___' (simple complexity) with 4 parameters.,"PROCEDURE Insert___ (
+   objid_      OUT    VARCHAR2,
+   objversion_ OUT    VARCHAR2,
+   newrec_     IN OUT asset_observation_config_tab%ROWTYPE,
+   attr_       IN OUT VARCHAR2 )
+IS
+BEGIN   
+   newrec_.config_id := ASSET_OBSERVATION_CONFIG_SEQ.nextval;    
+   super(objid_, objversion_, newrec_, attr_);
+END Insert___;
+
+-------------------- LU SPECIFIC PRIVATE METHODS ----------------------------
+
+
+-------------------- LU SPECIFIC PROTECTED METHODS --------------------------
+
+
+--------------------...",,,
+8,asinsi,C:\repos\_ifs\25.1.0\asinsi\source\asinsi\database\AssetHealthUtil.plsql,medium,15.0,1443,20,"inv, sor, rso, acc, act","Procedure 'Calculate_Asset_Health' (medium complexity) with 1 parameter handles inv, acc performs data operations.","Procedure 'Calculate_Asset_Health' (medium complexity) with 1 parameter handles inv, acc performs data operations.","PROCEDURE Calculate_Asset_Health
+IS
+   msg_          VARCHAR2(200);  
+   asset_health_ NUMBER := 0;
+   health_level_ asset_health_history_tab.health_level%TYPE;
+   
+   CURSOR get_assets IS
+      SELECT 
+         t2.asset_group          asset_group,
+         t1.equipment_object_seq asset_id,
+         t1.mch_type             asset_type
+      FROM equipment_object_tab t1
+      INNER JOIN asset_health_indicator_tab t2
+      ON t1.mch_type = t2.asset_type
+      GROUP BY t1.equipment_object_seq,t1.mch...",,,
+9,aspcom,C:\repos\_ifs\25.1.0\aspcom\source\aspcom\database\AssetPerfCommUtil.plsql,simple,4.3,325,20,"curr, component, comp, compo, acc","Function 'Get_Current_Iot_State' (simple complexity) with 1 parameter handles curr, component, comp.","Function 'Get_Current_Iot_State' (simple complexity) with 1 parameter handles curr, component, comp.","FUNCTION Get_Current_Iot_State (
+   equipment_object_seq_ IN NUMBER ) RETURN VARCHAR2
+IS
+   
+BEGIN
+   $IF Component_Asdtcl_SYS.INSTALLED $THEN
+      RETURN Asset_Start_Stop_Event_API.Get_Current_Machine_State(equipment_object_seq_);
+   $ELSE
+      RETURN 'Not Applicable';
+   $END
+END Get_Current_Iot_State;
+
+@UncheckedAccess",,,
+10,aspred,C:\repos\_ifs\25.1.0\aspred\source\aspred\database\AsPredConfEquipMapping.plsql,medium,12.0,413,5,"equip, red, tem, cha, che","Function 'Check_Sites_Exist' (medium complexity) with 1 parameter performs data operations, error handling.","Function 'Check_Sites_Exist' (medium complexity) with 1 parameter performs data operations, error handling.","FUNCTION Check_Sites_Exist (
+   as_pred_config_id_ NUMBER ) RETURN VARCHAR2
+IS
+   temp_ VARCHAR2(5);
+BEGIN
+   IF (as_pred_config_id_ IS NULL) THEN
+      RETURN NULL;
+   END IF;
+
+   SELECT 'TRUE'
+   INTO temp_
+   FROM as_pred_conf_equip_mapping
+   WHERE as_pred_config_id = as_pred_config_id_
+   AND rownum = 1;
+   
+   RETURN temp_;
+EXCEPTION
+   WHEN no_data_found THEN
+      RETURN 'FALSE';
+END Check_Sites_Exist;",,,
