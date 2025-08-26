@@ -10,6 +10,7 @@ import json
 import time
 import random
 import logging
+import gc  # For explicit garbage collection
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
@@ -393,15 +394,21 @@ class DiversifiedBatchGenerator:
     def clear_gpu_memory(self):
         """Aggressively clear GPU memory to free fragmented memory."""
         if torch.cuda.is_available():
-            # Multiple clearing passes
+            # Python garbage collection first
+            gc.collect()
+
+            # Multiple PyTorch clearing passes
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-            torch.cuda.ipc_collect()  # Inter-process cleanup
 
-            import gc
+            # Inter-process cleanup
+            try:
+                torch.cuda.ipc_collect()  # Inter-process cleanup
+            except:
+                pass  # Sometimes fails, that's ok
 
-            gc.collect()  # Python garbage collection
-
+            # Second pass
+            gc.collect()  # Python garbage collection again
             torch.cuda.empty_cache()  # Second pass
             torch.cuda.synchronize()
 
@@ -488,50 +495,71 @@ class DiversifiedBatchGenerator:
     def generate_summary_from_plan(
         self, planning_item: Dict[str, Any]
     ) -> Optional[str]:
-        """Generate summary from pre-computed planning item."""
+        """Generate summary from pre-computed planning item with proper memory management."""
         try:
             prompt = planning_item["prompt"]
 
-            # Tokenize with manageable context window (balance quality vs memory)
-            inputs = self.tokenizer(
-                prompt,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=3500,
-            )
+            # Use no_grad context for the entire generation to prevent gradient accumulation
+            with torch.no_grad():
+                # Tokenize with manageable context window (balance quality vs memory)
+                inputs = self.tokenizer(
+                    prompt,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=3500,
+                )
 
-            # Move inputs to model's primary device
-            model_device = next(self.model.parameters()).device
-            inputs = {k: v.to(model_device) for k, v in inputs.items()}
+                # Move inputs to model's primary device
+                model_device = next(self.model.parameters()).device
+                inputs = {k: v.to(model_device) for k, v in inputs.items()}
 
-            # Generate with optimized settings
-            outputs = self.model.generate(
-                inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_new_tokens=500,  # Further reduced to stay within 16GB VRAM
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                use_cache=True,
-            )
+                # Generate with optimized settings
+                outputs = self.model.generate(
+                    inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    max_new_tokens=500,  # Further reduced to stay within 16GB VRAM
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True,
+                )
 
-            # Decode response
-            generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                # Decode response immediately
+                generated_text = self.tokenizer.decode(
+                    outputs[0], skip_special_tokens=True
+                )
 
-            # Extract only the summary part
-            if "**Summary:**" in generated_text:
-                summary = generated_text.split("**Summary:**")[-1].strip()
-                return summary
-            else:
-                return generated_text[len(prompt) :].strip()
+                # Clean up GPU tensors immediately after use
+                for key in inputs:
+                    inputs[key] = inputs[key].cpu()  # Move to CPU
+                    del inputs[key]  # Delete reference
+                del inputs
+
+                # Clean up outputs
+                outputs = outputs.cpu()  # Move to CPU
+                del outputs
+
+                # Force GPU cache cleanup
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                # Extract only the summary part
+                if "**Summary:**" in generated_text:
+                    summary = generated_text.split("**Summary:**")[-1].strip()
+                    return summary
+                else:
+                    return generated_text[len(prompt) :].strip()
 
         except Exception as e:
             logger.error(
                 f"Error generating summary for {planning_item['procedure_name']}: {e}"
             )
+            # Emergency cleanup on error
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return None
 
     def run_diversified_generation(self):
@@ -576,8 +604,10 @@ class DiversifiedBatchGenerator:
                 tqdm(planning_data, desc="Processing diversified procedures")
             ):
 
-                # More aggressive cache clearing every 10 procedures to prevent memory buildup
-                if i > 0 and i % 10 == 0 and torch.cuda.is_available():
+                # More aggressive memory management every 5 procedures
+                if i > 0 and i % 5 == 0 and torch.cuda.is_available():
+                    # Explicit garbage collection
+                    gc.collect()
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
 
@@ -593,6 +623,9 @@ class DiversifiedBatchGenerator:
                     proc_start_time = time.time()
                     summary = self.generate_summary_from_plan(planning_item)
                     proc_time = time.time() - proc_start_time
+
+                    # Force cleanup after each generation
+                    gc.collect()
 
                     if summary:
                         # Save result
@@ -645,13 +678,21 @@ class DiversifiedBatchGenerator:
                     logger.error(
                         f"Error processing {planning_item['procedure_name']}: {e}"
                     )
-                    # Aggressive cache clearing after errors
+                    # Aggressive cleanup after errors
+                    gc.collect()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
                         torch.cuda.synchronize()
 
         total_time = time.time() - start_time
         avg_tokens_per_sec = (len(results) * 500) / total_time if total_time > 0 else 0
+
+        # Final cleanup
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
         # Final statistics
         print(
