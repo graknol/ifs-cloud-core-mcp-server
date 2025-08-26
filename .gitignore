@@ -113,3 +113,8 @@ demo*/
 archive/
 
 _work/
+
+top_10/
+plsql_analysis_copilot/
+
+.copilot_token

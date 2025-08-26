@@ -2180,17 +2180,54 @@ the summary as needed. All changes are auto-saved."""
         }
         self.status_indicator.config(fg=status_colors.get(status, "#ffb900"))
 
-        # Update context information (left panel)
-        context_info = f"""📁 MODULE: {proc.get('module_name', 'unknown').upper()}
-📄 FILE: {Path(proc['file_path']).name}
-⚙️ PROCEDURE: {proc['name']}
-📝 PARAMETERS: {', '.join(proc.get('parameters', []))}
-📍 LINE: {proc.get('line_number', '?')}
-🔄 STATUS: {status.upper()}
+        # Update context information (left panel) with enhanced metadata
+        context_parts = [
+            f"📁 MODULE: {proc.get('module_name', 'unknown').upper()}",
+            f"📄 FILE: {Path(proc['file_path']).name}",
+            f"⚙️ PROCEDURE: {proc['name']}",
+            f"📝 PARAMETERS: {', '.join(proc.get('parameters', []))}",
+            f"📍 LINE: {proc.get('line_number', '?')}",
+            f"🔄 STATUS: {status.upper()}",
+        ]
 
- BUSINESS CODE:
-{proc.get('business_code', proc.get('body', '')[:500] + '...' if len(proc.get('body', '')) > 500 else proc.get('body', ''))}
-"""
+        # Add token count information if available
+        if proc.get("summary_token_count") or proc.get("prompt_token_count"):
+            context_parts.append("")  # Empty line separator
+            context_parts.append("🔤 TOKEN COUNTS:")
+            if proc.get("summary_token_count"):
+                context_parts.append(
+                    f"   Summary: {proc['summary_token_count']} tokens"
+                )
+            if proc.get("prompt_token_count"):
+                context_parts.append(f"   Prompt: {proc['prompt_token_count']} tokens")
+
+        # Add technical metadata if available
+        metadata_items = []
+        if proc.get("complexity_score"):
+            metadata_items.append(f"Complexity: {proc['complexity_score']:.1f}")
+        if proc.get("content_length"):
+            metadata_items.append(f"Content: {proc['content_length']:,} chars")
+        if proc.get("generation_time"):
+            metadata_items.append(f"Gen Time: {proc['generation_time']:.1f}s")
+
+        if metadata_items:
+            context_parts.append("")
+            context_parts.append("📊 METADATA:")
+            for item in metadata_items:
+                context_parts.append(f"   {item}")
+
+        # Add business code section
+        business_code = proc.get("business_code", proc.get("body", ""))
+        if business_code:
+            context_parts.append("")
+            context_parts.append("💼 BUSINESS CODE:")
+            # Limit to first 500 characters
+            if len(business_code) > 500:
+                context_parts.append(business_code[:500] + "...")
+            else:
+                context_parts.append(business_code)
+
+        context_info = "\n".join(context_parts)
 
         self.context_text.config(state=tk.NORMAL)
         self.context_text.delete(1.0, tk.END)
@@ -2217,10 +2254,28 @@ the summary as needed. All changes are auto-saved."""
         self.file_contents_text.insert(tk.END, file_contents)
         self.file_contents_text.config(state=tk.DISABLED)
 
-        # Update status display
-        self.status_label.config(
-            text=f"Status: {status.upper()} • Module: {proc.get('module_name', 'unknown').upper()}"
-        )
+        # Update status display with enhanced information including token counts
+        status_parts = [f"Status: {status.upper()}"]
+        status_parts.append(f"Module: {proc.get('module_name', 'unknown').upper()}")
+
+        # Add token count information if available
+        if proc.get("summary_token_count"):
+            status_parts.append(f"Summary: {proc['summary_token_count']} tokens")
+        if proc.get("prompt_token_count"):
+            status_parts.append(f"Prompt: {proc['prompt_token_count']} tokens")
+
+        # Add complexity score if available
+        if proc.get("complexity_score"):
+            complexity = proc["complexity_score"]
+            status_parts.append(f"Complexity: {complexity:.1f}")
+
+        # Add generation time if available
+        if proc.get("generation_time"):
+            gen_time = proc["generation_time"]
+            status_parts.append(f"Gen Time: {gen_time:.1f}s")
+
+        status_text = " • ".join(status_parts)
+        self.status_label.config(text=status_text)
 
     def load_file_contents(self, file_path: str) -> str:
         """Load full file contents with line numbers."""

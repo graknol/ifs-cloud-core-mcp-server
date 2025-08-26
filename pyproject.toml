@@ -44,6 +44,8 @@ dependencies = [
     "datasets>=4.0.0",
     "bitsandbytes>=0.47.0",
     "hf-xet>=1.1.7",
+    "openai>=1.101.0",
+    "anthropic>=0.64.0",
 ]
 
 [project.optional-dependencies]

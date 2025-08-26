@@ -93,34 +93,215 @@ class SummaryCorrelator:
     def extract_plsql_procedure(
         self, file_path: Path, line_start: int, line_end: int, procedure_name: str
     ) -> Optional[str]:
-        """Extract a specific procedure from a PL/SQL file."""
+        """Extract a specific procedure from a PL/SQL file using proper IFS parser integration."""
         try:
             if not file_path.exists():
                 logger.warning(f"File not found: {file_path}")
                 return None
 
+            # Read the full file content
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                full_content = f.read()
+
+            # Create a minimal parser integration instance
+            from ifs_parser_integration import IFSCloudParserIntegration
+
+            parser_integration = IFSCloudParserIntegration()
+
+            # Parse the file using the IFS parser
+            parsed_result = parser_integration.parse_code(full_content)
+
+            # Try to extract the procedure using the parsed result
+            procedure_body = self._extract_procedure_from_parsed(
+                full_content, procedure_name, parsed_result
+            )
+
+            if procedure_body:
+                logger.info(
+                    f"✅ Successfully extracted procedure {procedure_name} using IFS parser"
+                )
+                return procedure_body
+            else:
+                # Fallback to the original method if parser fails
+                logger.warning(
+                    f"Parser extraction failed for {procedure_name}, falling back to line-based extraction"
+                )
+                return self._extract_plsql_procedure_fallback(
+                    file_path, line_start, line_end, procedure_name
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error extracting procedure {procedure_name} from {file_path}: {e}"
+            )
+            # Fallback to the original method
+            return self._extract_plsql_procedure_fallback(
+                file_path, line_start, line_end, procedure_name
+            )
+
+    def _extract_procedure_from_parsed(
+        self, content: str, procedure_name: str, parsed_result: dict
+    ) -> Optional[str]:
+        """Extract procedure using the parsed AST information."""
+        try:
+            lines = content.split("\n")
+
+            # Find the procedure declaration in the content
+            for i, line in enumerate(lines):
+                line_upper = line.upper().strip()
+                if f"PROCEDURE {procedure_name.upper()}" in line_upper:
+                    start_line = i
+
+                    # Find the matching END statement
+                    procedure_depth = 0
+                    found_procedure_start = False
+
+                    for j in range(start_line, len(lines)):
+                        current_line = lines[j].upper().strip()
+
+                        # Track if we've found the procedure start
+                        if (
+                            not found_procedure_start
+                            and f"PROCEDURE {procedure_name.upper()}" in current_line
+                        ):
+                            found_procedure_start = True
+                            procedure_depth = 1
+                            continue
+
+                        if found_procedure_start:
+                            # Look for nested procedures/functions
+                            if any(
+                                keyword in current_line
+                                for keyword in ["PROCEDURE ", "FUNCTION "]
+                            ):
+                                procedure_depth += 1
+                            # Look for END statements
+                            elif current_line.startswith("END"):
+                                if f"END {procedure_name.upper()}" in current_line:
+                                    # Found the exact matching END statement
+                                    return "\n".join(lines[start_line : j + 1])
+                                elif current_line == "END;":
+                                    # Generic END statement - only match if depth is 1
+                                    procedure_depth -= 1
+                                    if procedure_depth == 0:
+                                        return "\n".join(lines[start_line : j + 1])
+
+                    # If we didn't find a proper end, return reasonable default
+                    end_line = min(start_line + 50, len(lines))
+                    return "\n".join(lines[start_line:end_line])
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error extracting from parsed result: {e}")
+            return None
+
+    def _extract_plsql_procedure_fallback(
+        self, file_path: Path, line_start: int, line_end: int, procedure_name: str
+    ) -> Optional[str]:
+        """Fallback extraction method using line numbers."""
+        try:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
-
-            if line_end > len(lines):
-                logger.warning(
-                    f"Line range {line_start}-{line_end} exceeds file length {len(lines)} in {file_path}"
-                )
-                line_end = len(lines)
 
             if line_start < 1:
                 line_start = 1
 
-            # Extract the procedure (convert to 0-based indexing)
-            procedure_lines = lines[line_start - 1 : line_end]
+            # Convert to 0-based indexing
+            start_idx = line_start - 1
+
+            if start_idx >= len(lines):
+                logger.warning(
+                    f"Start line {line_start} exceeds file length {len(lines)} in {file_path}"
+                )
+                return None
+
+            # Find the actual procedure boundaries using smarter detection
+            actual_end_idx = self._find_procedure_end(lines, start_idx, procedure_name)
+
+            if actual_end_idx is None:
+                # Fallback to original line_end if provided and reasonable
+                if line_end <= len(lines):
+                    actual_end_idx = line_end - 1
+                else:
+                    # Use a reasonable default (50 lines max for a single procedure)
+                    actual_end_idx = min(start_idx + 50, len(lines) - 1)
+
+            # Extract the procedure lines
+            procedure_lines = lines[start_idx : actual_end_idx + 1]
             procedure_text = "".join(procedure_lines)
 
             return procedure_text.strip()
 
         except Exception as e:
             logger.error(
-                f"Error extracting procedure {procedure_name} from {file_path}: {e}"
+                f"Error in fallback extraction for {procedure_name} from {file_path}: {e}"
             )
+            return None
+
+    def _find_procedure_end(
+        self, lines: List[str], start_idx: int, procedure_name: str
+    ) -> Optional[int]:
+        """Find the actual end of a procedure using smart boundary detection."""
+        try:
+            procedure_name_upper = procedure_name.upper()
+
+            # Look for the procedure declaration first to understand the structure
+            found_begin = False
+            paren_count = 0
+            in_parameters = False
+
+            # Start searching from the procedure declaration
+            for i in range(start_idx, min(start_idx + 100, len(lines))):
+                line = lines[i].strip()
+                line_upper = line.upper()
+
+                # Skip empty lines and comments
+                if not line or line_upper.startswith("--"):
+                    continue
+
+                # Track parentheses for parameter detection
+                if not found_begin:
+                    if "(" in line:
+                        in_parameters = True
+                        paren_count += line.count("(") - line.count(")")
+                    elif in_parameters:
+                        paren_count += line.count("(") - line.count(")")
+
+                    # Found the BEGIN keyword
+                    if "BEGIN" in line_upper and not in_parameters and paren_count <= 0:
+                        found_begin = True
+                        continue
+
+                # After finding BEGIN, look for END
+                if found_begin:
+                    # Look for END statement that matches this procedure
+                    if line_upper.startswith("END "):
+                        # Check if it's the end of our specific procedure
+                        if procedure_name_upper in line_upper:
+                            return i
+                        # Also accept END; as a generic end
+                        elif line_upper.strip() == "END;" and i < start_idx + 20:
+                            # Only accept generic END if it's close to start (single procedure)
+                            return i
+                    elif line_upper.strip() == "END;":
+                        # Generic END statement - accept if close to procedure start
+                        if i < start_idx + 20:
+                            return i
+                    elif (
+                        line_upper.startswith("PROCEDURE ")
+                        or line_upper.startswith("FUNCTION ")
+                    ) and i > start_idx + 5:
+                        # Found start of next procedure/function, so previous line is end
+                        return i - 1
+
+            # If we didn't find a proper end, return a reasonable default
+            return min(
+                start_idx + 30, len(lines) - 1
+            )  # Reduced from 50 to 30 lines max
+
+        except Exception as e:
+            logger.debug(f"Error finding procedure end for {procedure_name}: {e}")
             return None
 
     def enhance_context_with_keywords(self, context: str) -> str:
@@ -179,7 +360,7 @@ class SummaryCorrelator:
             enhanced_context = self.enhance_context_with_keywords(procedure_text)
 
             # Generate the complete prompt (same format as used in diversified generator)
-            prompt = f"""You are an expert IFS Cloud developer analyzing PL/SQL procedures. Provide a comprehensive technical summary of the following procedure from the IFS Cloud {summary_entry['module'].upper()} module.
+            prompt = f"""You are an expert IFS Cloud developer analyzing PL/SQL procedures. Provide a comprehensive technical summary of the following procedure from the IFS Cloud {summary_entry.get('module', summary_entry.get('module_name', 'UNKNOWN')).upper()} module.
 
 **Analysis Guidelines:**
 - Focus on business logic, integration points, and technical implementation
@@ -190,7 +371,7 @@ class SummaryCorrelator:
 - Keep the summary concise but thorough (aim for 300-500 words)
 
 **Procedure Information:**
-- Module: {summary_entry['module'].upper()}
+- Module: {summary_entry.get('module', summary_entry.get('module_name', 'UNKNOWN')).upper()}
 - Procedure: {summary_entry['procedure_name']}
 - File: {Path(summary_entry['file_path']).name}
 - Lines: {summary_entry['line_start']}-{summary_entry['line_end']}
