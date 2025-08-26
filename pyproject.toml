@@ -42,6 +42,8 @@ dependencies = [
     "trl>=0.21.0",
     "matplotlib>=3.10.5",
     "datasets>=4.0.0",
+    "bitsandbytes>=0.47.0",
+    "hf-xet>=1.1.7",
 ]
 
 [project.optional-dependencies]
