@@ -23,44 +23,46 @@ logger = logging.getLogger(__name__)
 
 class SummaryCorrelator:
     """Correlate summaries with source code and regenerate prompts."""
-    
+
     def __init__(self):
         self.source_root = Path("C:/repos/_ifs/25.1.0")
         self.important_keywords = self.load_important_keywords()
-        
+
     def estimate_token_count(self, text: str) -> int:
         """Estimate token count using a simple tokenization approach.
-        
+
         This provides a rough estimate based on:
         - Word boundaries (spaces, punctuation)
         - Common programming tokens (operators, keywords)
         - Typical GPT-style tokenization patterns
-        
+
         Note: This is an approximation. Actual token counts may vary by ~10-20%.
         """
         if not text:
             return 0
-            
+
         # Basic tokenization patterns
         # Split on whitespace and common punctuation, but keep some programming constructs together
         tokens = []
-        
+
         # Replace common programming patterns with single tokens
-        text = re.sub(r'\b\d+\.\d+\b', ' <NUMBER> ', text)  # Decimals
-        text = re.sub(r'\b\d+\b', ' <NUMBER> ', text)  # Integers  
-        text = re.sub(r'["\'][^"\']*["\']', ' <STRING> ', text)  # String literals
-        text = re.sub(r'--.*$', ' <COMMENT> ', text, flags=re.MULTILINE)  # SQL comments
-        text = re.sub(r'/\*.*?\*/', ' <COMMENT> ', text, flags=re.DOTALL)  # Block comments
-        
+        text = re.sub(r"\b\d+\.\d+\b", " <NUMBER> ", text)  # Decimals
+        text = re.sub(r"\b\d+\b", " <NUMBER> ", text)  # Integers
+        text = re.sub(r'["\'][^"\']*["\']', " <STRING> ", text)  # String literals
+        text = re.sub(r"--.*$", " <COMMENT> ", text, flags=re.MULTILINE)  # SQL comments
+        text = re.sub(
+            r"/\*.*?\*/", " <COMMENT> ", text, flags=re.DOTALL
+        )  # Block comments
+
         # Split on whitespace and punctuation, but preserve some structure
-        parts = re.findall(r'\w+|[^\w\s]', text)
-        
+        parts = re.findall(r"\w+|[^\w\s]", text)
+
         # Estimate tokens - some heuristics:
         # - Short words (1-3 chars) typically = 1 token
-        # - Medium words (4-8 chars) typically = 1-2 tokens  
+        # - Medium words (4-8 chars) typically = 1-2 tokens
         # - Long words (9+ chars) typically = 2-3 tokens
         # - Punctuation typically = 1 token each
-        
+
         estimated_tokens = 0
         for part in parts:
             if part.isalnum():
@@ -72,12 +74,12 @@ class SummaryCorrelator:
                     estimated_tokens += max(2, len(part) // 3)
             else:
                 estimated_tokens += 1
-                
+
         # Add some padding for subword tokenization (common in modern tokenizers)
         estimated_tokens = int(estimated_tokens * 1.2)
-        
+
         return estimated_tokens
-        
+
     def load_important_keywords(self) -> List[str]:
         """Load important IFS Cloud keywords for context enhancement."""
         try:
@@ -242,7 +244,7 @@ Provide a detailed analysis following the above format. Your summary should cove
                     # Estimate token counts
                     summary_tokens = self.estimate_token_count(summary["summary"])
                     prompt_tokens = self.estimate_token_count(prompt)
-                    
+
                     # Create the correlated entry
                     correlated_entry = {
                         "id": summary["id"],
@@ -289,11 +291,15 @@ Provide a detailed analysis following the above format. Your summary should cove
 
             # Calculate token statistics
             if correlated_data:
-                total_summary_tokens = sum(entry["summary_token_count"] for entry in correlated_data)
-                total_prompt_tokens = sum(entry["prompt_token_count"] for entry in correlated_data)
+                total_summary_tokens = sum(
+                    entry["summary_token_count"] for entry in correlated_data
+                )
+                total_prompt_tokens = sum(
+                    entry["prompt_token_count"] for entry in correlated_data
+                )
                 avg_summary_tokens = total_summary_tokens / len(correlated_data)
                 avg_prompt_tokens = total_prompt_tokens / len(correlated_data)
-                
+
                 logger.info(f"✅ Correlated summaries saved to: {output_file}")
                 logger.info(
                     f"📊 Results: {successful_correlations} successful, {failed_correlations} failed correlations"
