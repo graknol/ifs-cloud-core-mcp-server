@@ -55,6 +55,8 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.12.10",
     "mypy>=1.0.0",
+    "wordcloud>=1.9.4",
+    "seaborn>=0.13.2",
 ]
 # Platform-specific dependencies
 linux = [
