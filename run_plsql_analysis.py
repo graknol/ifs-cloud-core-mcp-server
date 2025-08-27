@@ -109,9 +109,9 @@ def run_copilot_analysis(args):
     """Run analysis using GitHub Copilot API"""
     from analyze_plsql_procedures import PLSQLProcedureAnalyzer
 
-    print("🚀 Starting analysis with GitHub Copilot API")
+    print("🚀 Starting analysis with GitHub Copilot Chat API")
     analyzer = PLSQLProcedureAnalyzer(
-        top_10_dir=args.top_10_dir, output_dir=args.output_dir + "_copilot"
+        top_10_dir=args.top_10_dir, output_dir=args.output_dir + "_combined"
     )
 
     analyzer.run_analysis(

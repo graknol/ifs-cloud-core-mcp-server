@@ -61,6 +61,35 @@ PL/SQL FILE CONTENT:
 EXTRACT PROCEDURES/FUNCTIONS NOW:
 """
 
+    def create_synthetic_questions_prompt(self, procedures):
+        """Create prompt for generating synthetic questions from extracted procedures"""
+        prompt = """You are an expert at creating training data for embedding models. 
+
+Generate synthetic questions and statements that correlate with the provided procedure summaries. This will be used to train an embedding model to understand user queries about business procedures.
+
+For each procedure provided below, create:
+1. Two brief query variants that have the same semantic meaning as the summary (as if the user is looking for something)
+2. Two statements in infinitive form (not present tense, not questions)
+
+Example format:
+### [Procedure Name]
+**Query 1:** How to validate customer data?
+**Query 2:** What checks ensure customer information is correct?
+**Statement 1:** To validate customer information for accuracy.
+**Statement 2:** To ensure customer data meets business requirements.
+
+IMPORTANT: Do not include the original procedure text in your response. Only provide the questions and statements.
+
+PROCEDURES TO PROCESS:
+"""
+
+        for i, proc in enumerate(procedures, 1):
+            prompt += f"\n{i}. **{proc['procedure_name']}:** {proc['summary']}\n"
+
+        prompt += "\nGenerate the synthetic questions and statements now:"
+
+        return prompt
+
     def get_module_files(self):
         """Get all PLSQL files organized by module"""
         module_files = defaultdict(list)
@@ -146,9 +175,11 @@ EXTRACT PROCEDURES/FUNCTIONS NOW:
         prompt = self.analysis_prompt_template.format(file_content=content)
 
         try:
-            # Call Copilot API
+            # Call Copilot API for analysis
             response = self.copilot.copilot_completion(
-                prompt, max_tokens=32000, temperature=0.3
+                prompt,
+                max_tokens=32000,
+                temperature=0.3,
             )
 
             if response:
@@ -169,7 +200,9 @@ EXTRACT PROCEDURES/FUNCTIONS NOW:
                     f.write(response)
 
                 print(f"✅ Analysis completed for {file_path.name}")
-                return {
+
+                # Create analysis result
+                analysis_result = {
                     "module": module_name,
                     "file": file_path.name,
                     "file_path": str(file_path),
@@ -178,6 +211,63 @@ EXTRACT PROCEDURES/FUNCTIONS NOW:
                     "content_length": len(content),
                     "timestamp": datetime.now().isoformat(),
                 }
+
+                # Extract procedures from the analysis
+                procedures = self.extract_procedures_from_response(analysis_result)
+
+                # Generate synthetic questions if we have procedures
+                if procedures:
+                    print(
+                        f"   └── Generating synthetic questions for {len(procedures)} procedures..."
+                    )
+                    questions_prompt = self.create_synthetic_questions_prompt(
+                        procedures
+                    )
+
+                    try:
+                        questions_response = self.copilot.copilot_completion(
+                            questions_prompt,
+                            max_tokens=16000,
+                            temperature=0.3,
+                        )
+
+                        if questions_response:
+                            # Save synthetic questions response
+                            questions_file = (
+                                self.output_dir
+                                / "synthetic_questions"
+                                / f"{module_name}_{file_path.stem}_questions.md"
+                            )
+                            questions_file.parent.mkdir(exist_ok=True)
+
+                            with open(questions_file, "w", encoding="utf-8") as f:
+                                f.write(
+                                    f"# Synthetic Questions for {module_name}/{file_path.name}\n\n"
+                                )
+                                f.write(f"**Source:** {module_name}/{file_path.name}\n")
+                                f.write(f"**Procedures:** {len(procedures)}\n")
+                                f.write(
+                                    f"**Timestamp:** {datetime.now().isoformat()}\n\n"
+                                )
+                                f.write("## Generated Questions and Statements\n\n")
+                                f.write(questions_response)
+
+                            # Add questions data to analysis result
+                            analysis_result["synthetic_questions_response"] = (
+                                questions_response
+                            )
+                            analysis_result["synthetic_questions_file"] = str(
+                                questions_file
+                            )
+
+                            print(f"   └── ✅ Generated synthetic questions")
+                        else:
+                            print(f"   └── ❌ Failed to generate synthetic questions")
+
+                    except Exception as e:
+                        print(f"   └── ❌ Error generating synthetic questions: {e}")
+
+                return analysis_result
             else:
                 print(f"❌ No response received for {file_path.name}")
                 return None
@@ -274,6 +364,68 @@ EXTRACT PROCEDURES/FUNCTIONS NOW:
 
         print(f"💾 Saved {len(all_procedures)} procedures to {output_file}")
 
+    def extract_synthetic_questions(self, analysis_result, original_procedures):
+        """Extract structured synthetic questions from the AI response"""
+        if "synthetic_questions_response" not in analysis_result:
+            return []
+
+        response_content = analysis_result["synthetic_questions_response"]
+        extracted_questions = []
+
+        # Pattern to match the expected format
+        # ### [Procedure Name]
+        # **Query 1:** ...
+        # **Query 2:** ...
+        # **Statement 1:** ...
+        # **Statement 2:** ...
+        pattern = r"### (.+?)\n\*\*Query 1:\*\*\s*(.+?)\n\*\*Query 2:\*\*\s*(.+?)\n\*\*Statement 1:\*\*\s*(.+?)\n\*\*Statement 2:\*\*\s*(.+?)(?=\n### |$)"
+        matches = re.findall(pattern, response_content, re.DOTALL)
+
+        for match in matches:
+            proc_name, query1, query2, stmt1, stmt2 = match
+
+            # Clean up the extracted text
+            proc_name = proc_name.strip()
+            query1 = re.sub(r"\s+", " ", query1.strip())
+            query2 = re.sub(r"\s+", " ", query2.strip())
+            stmt1 = re.sub(r"\s+", " ", stmt1.strip())
+            stmt2 = re.sub(r"\s+", " ", stmt2.strip())
+
+            # Find the original summary
+            original_summary = None
+            for proc in original_procedures:
+                if proc["procedure_name"] == proc_name:
+                    original_summary = proc["summary"]
+                    break
+
+            extracted_questions.append(
+                {
+                    "procedure_name": proc_name,
+                    "original_summary": original_summary,
+                    "synthetic_queries": [query1, query2],
+                    "synthetic_statements": [stmt1, stmt2],
+                    "module": analysis_result["module"],
+                    "file": analysis_result["file"],
+                    "source_file": analysis_result["file_path"],
+                    "timestamp": analysis_result["timestamp"],
+                }
+            )
+
+        return extracted_questions
+
+    def save_synthetic_questions_jsonl(
+        self, all_questions, filename="synthetic_questions.jsonl"
+    ):
+        """Save all extracted synthetic questions to a JSONL file"""
+        output_file = self.output_dir / filename
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            for question_set in all_questions:
+                json_line = json.dumps(question_set, ensure_ascii=False)
+                f.write(json_line + "\n")
+
+        print(f"💾 Saved {len(all_questions)} question sets to {output_file}")
+
     def run_analysis(self, max_files_per_module=20, delay_between_calls=2):
         """Run the complete analysis workflow"""
         print("🚀 Starting PLSQL Procedure Analysis")
@@ -295,6 +447,7 @@ EXTRACT PROCEDURES/FUNCTIONS NOW:
 
         all_analyses = []
         all_procedures = []
+        all_questions = []
 
         total_files = sum(
             min(len(files), max_files_per_module) for files in module_files.values()
@@ -322,7 +475,17 @@ EXTRACT PROCEDURES/FUNCTIONS NOW:
                     procedures = self.extract_procedures_from_response(analysis)
                     all_procedures.extend(procedures)
 
-                    print(f"   └── Extracted {len(procedures)} procedures")
+                    # Extract synthetic questions if available
+                    if "synthetic_questions_response" in analysis:
+                        questions = self.extract_synthetic_questions(
+                            analysis, procedures
+                        )
+                        all_questions.extend(questions)
+                        print(
+                            f"   └── Extracted {len(procedures)} procedures, {len(questions)} question sets"
+                        )
+                    else:
+                        print(f"   └── Extracted {len(procedures)} procedures")
 
                 # Delay between API calls to avoid rate limiting
                 if delay_between_calls > 0:
@@ -339,10 +502,16 @@ EXTRACT PROCEDURES/FUNCTIONS NOW:
         # Save procedures as JSONL
         self.save_procedures_jsonl(all_procedures)
 
+        # Save synthetic questions as JSONL
+        if all_questions:
+            self.save_synthetic_questions_jsonl(all_questions)
+
         # Print summary
         print(f"\n📈 Analysis Complete!")
         print(f"   • Processed {len(all_analyses)} files")
         print(f"   • Extracted {len(all_procedures)} procedures")
+        if all_questions:
+            print(f"   • Generated {len(all_questions)} question sets")
         print(f"   • Results saved to: {self.output_dir}")
 
         # Print per-module breakdown

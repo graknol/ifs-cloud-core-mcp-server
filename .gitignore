@@ -116,5 +116,6 @@ _work/
 
 top_10/
 plsql_analysis_copilot/
+plsql_analysis_combined/
 
 .copilot_token
