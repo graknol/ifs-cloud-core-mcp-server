@@ -124,16 +124,18 @@ def add_instruction_variations(instruction: str, variation_probability: float = 
     return instruction
 
 
-def add_final_typos(text: str, typo_probability: float = 0.2) -> str:
+def add_final_typos(text: str, typo_probability: float = 0.25) -> str:
     """
     FINAL STEP: Add realistic typos with probability distribution for number of typos.
     This should be the very last augmentation step applied to text.
     
-    Probability distribution for number of typos:
-    - 80%: 0 typos (clean text)
-    - 15%: 1 typo
-    - 4%: 2 typos  
-    - 1%: 3+ typos
+    Adjusted probability distribution for number of typos:
+    - 75%: 0 typos (clean text) 
+    - 18%: 1 typo
+    - 5%: 2 typos  
+    - 2%: 3+ typos
+    
+    The input typo_probability controls what percentage of texts get ANY typos.
     """
     import random
     
@@ -142,27 +144,31 @@ def add_final_typos(text: str, typo_probability: float = 0.2) -> str:
     
     # Determine number of typos based on probability distribution
     rand = random.random()
-    if rand < 0.75:  # 75% of the 20% that get typos = 15% overall
+    if rand < 0.72:  # 72% of the texts that get typos get 1 typo = ~18% overall when typo_probability=0.25
         num_typos = 1
-    elif rand < 0.95:  # 20% of the 20% = 4% overall  
+    elif rand < 0.92:  # 20% of the texts that get typos get 2 typos = ~5% overall  
         num_typos = 2
-    else:  # 5% of the 20% = 1% overall
+    else:  # 8% of the texts that get typos get 3+ typos = ~2% overall
         num_typos = random.choice([3, 4])  # Rare heavy typos
     
     words = text.split()
     if len(words) < 2:
         return text
     
+    # Keep track of already modified words to avoid over-modification
+    modified_words = set()
+    
     # Apply the determined number of typos
     for typo_round in range(num_typos):
-        # Pick a word to typo (avoid very short words and already typo'd words)
+        # Pick a word to typo (avoid very short words and recently modified ones)
         target_words = [(i, w) for i, w in enumerate(words) 
-                       if len(w) > 3 and not any(c*2 in w for c in 'abcdefghijklmnopqrstuvwxyz')]
+                       if len(w) > 3 and i not in modified_words]
         
         if not target_words:
             break
             
         word_idx, word = random.choice(target_words)
+        modified_words.add(word_idx)
         
         # Choose typo type
         typo_type = random.choice(['substitute', 'omit', 'duplicate', 'transpose'])
@@ -511,7 +517,7 @@ def convert_to_alpaca(input_file: str, output_file: str) -> None:
                 # Add instruction variations and noise (increased probabilities for max diversity)
                 varied_instruction = add_instruction_variations(base_instruction, variation_probability=0.4)
                 formatted_instruction = add_formatting_noise(varied_instruction, noise_probability=0.2)
-                final_instruction = add_final_typos(formatted_instruction, typo_probability=0.25)
+                final_instruction = add_final_typos(formatted_instruction, typo_probability=0.35)
                 
                 alpaca_examples.append({
                     "instruction": final_instruction,
@@ -536,7 +542,7 @@ def convert_to_alpaca(input_file: str, output_file: str) -> None:
                 base_instruction = random.choice(question_prompts)
                 varied_instruction = add_instruction_variations(base_instruction, variation_probability=0.4)
                 formatted_instruction = add_formatting_noise(varied_instruction, noise_probability=0.2)
-                final_instruction = add_final_typos(formatted_instruction, typo_probability=0.25)
+                final_instruction = add_final_typos(formatted_instruction, typo_probability=0.35)
                 
                 alpaca_examples.append({
                     "instruction": final_instruction,
@@ -569,7 +575,7 @@ def convert_to_alpaca(input_file: str, output_file: str) -> None:
                 input_context = add_controlled_noise(input_context, noise_probability=0.15)
                 varied_instruction = add_instruction_variations(base_instruction, variation_probability=0.4)
                 formatted_instruction = add_formatting_noise(varied_instruction, noise_probability=0.2)
-                final_instruction = add_final_typos(formatted_instruction, typo_probability=0.25)
+                final_instruction = add_final_typos(formatted_instruction, typo_probability=0.35)
                 
                 # Create a question based on the summary (simple heuristic)
                 question_output = f"How do you {procedure_name.lower().replace('_', ' ')}?"
@@ -672,5 +678,5 @@ def main():
 
 
 if __name__ == "__main__":
-    random.seed(42)  # For reproducible results
+    # No fixed seed for maximum randomness and typo diversity
     main()
